@@ -38,4 +38,8 @@ def format_amount(coin_id: str, amount: int) -> str:
         return f"{amount} drops ({amount / 1_000_000:.6f} XRP)"
     if spec.unit == "sat":
         return f"{amount} sats"
+    if spec.unit == "token":
+        return f"{amount} base units ({amount / 1_000_000:.6f} {spec.symbol})"
+    if spec.unit == "lamport":
+        return f"{amount} lamports ({amount / 1_000_000_000:.9f} SOL)"
     return f"{amount} {spec.unit}s"

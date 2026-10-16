@@ -55,6 +55,11 @@ wallet-mcp hw-sign --device ledger --file unsigned.json
 | Avalanche C-chain | **tested** | fuji | mainnet (opt-in) | eth-account (chain id 43113 / 43114) | wei |
 | XRP | **tested** | testnet | devnet, mainnet (opt-in) | xrpl-py | drop |
 | Litecoin | **tested** | testnet | mainnet (opt-in) | embit (BIP84, LTC bech32) | litoshi |
+| USDC on Ethereum | **tested** | sepolia | mainnet (opt-in) | eth-account, ERC-20 | 10⁻⁶ USDC |
+| USDT on Ethereum | **tested** | sepolia | mainnet (opt-in) | eth-account, ERC-20 (Aave test token on Sepolia) | 10⁻⁶ USDT |
+| USDC on Avalanche | **tested** | fuji | mainnet (opt-in) | eth-account, ERC-20 | 10⁻⁶ USDC |
+| USDT on Avalanche | **tested** | fuji | mainnet (opt-in) | eth-account, ERC-20 (set `WALLET_MCP_USDT_AVAX_TOKEN` on Fuji) | 10⁻⁶ USDT |
+| Solana | **experimental** | devnet | testnet, mainnet (opt-in) | solders (m/44'/501'/0'/0') | lamport |
 
 **Tested** means the offline suite covers address derivation and a mocked send through the central approval gate. XRP destination tags are part of that: known exchange deposit addresses require a tag, and the tag is bound into the approval code. Litecoin covers BIP84 on testnet and mainnet. **Experimental** means the same mocked path exists, but the adapter is new or incomplete. Opt-in testnet reads (`WALLET_MCP_INTEGRATION=1`) never broadcast.
 
@@ -211,6 +216,8 @@ Default hot limits (base units, amount **plus** fee):
 | avax | 0.01 AVAX | 0.05 AVAX | 0.001 AVAX worst-case fee |
 | xrp | 1 XRP | 5 XRP | 1 000 drops |
 | ltc | 50 000 litoshi | 100 000 litoshi | 50 litoshi/vB |
+| usdc / usdt | 10 tokens | 50 tokens | parent-chain gas cap (also counted on eth or avax) |
+| sol | 0.01 SOL | 0.05 SOL | 100 000 lamports |
 
 A file that raises a ceiling without a valid HMAC is rejected at startup. Lowering a limit does not need the secret. The web UI cannot raise one.
 

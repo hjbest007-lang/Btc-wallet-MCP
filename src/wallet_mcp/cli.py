@@ -153,11 +153,16 @@ def _validate_import(coin_id: str, network: str, document: dict) -> None:
         from btc_wallet_mcp.wallet import NETWORKS
         bdk.Descriptor(document["external"], NETWORKS[network])
         bdk.Descriptor(document["internal"], NETWORKS[network])
-    elif coin_id in {"eth", "avax"}:
+    elif coin_id in {"eth", "avax", "usdc_eth", "usdt_eth", "usdc_avax", "usdt_avax"}:
         if document.get("kind") != "address":
             raise ConfigError(f"{coin_id} watch file must have kind address")
         from .adapters.evm import checksum
         checksum(document["address"])
+    elif coin_id == "sol":
+        if document.get("kind") != "address":
+            raise ConfigError("sol watch file must have kind address")
+        from .adapters.solana import parse_pubkey
+        parse_pubkey(document["address"])
     elif coin_id == "xrp":
         if document.get("kind") != "address":
             raise ConfigError("xrp watch file must have kind address")
@@ -220,6 +225,8 @@ def cmd_approve(cfg, args) -> None:
     tag_line = ""
     if pending.extra.startswith("tag:"):
         tag_line = f"Tag     : {pending.extra.split(':', 1)[1]}\n"
+    if pending.extra.startswith("gas:"):
+        tag_line = f"Gas     : {pending.extra.split(':', 1)[1]} (native, bound into the code)\n"
     print(
         f"Coin    : {pending.coin}\nNetwork : {pending.network}\nRole    : {pending.role}\n"
         f"To      : {pending.address}\n{tag_line}"

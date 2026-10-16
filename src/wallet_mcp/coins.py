@@ -51,7 +51,18 @@ def _nets(*items: NetworkSpec) -> dict[str, NetworkSpec]:
 
 
 # Order is the checkbox order in `wallet-mcp configure`.
-COIN_ORDER = ("btc", "eth", "avax", "xrp", "ltc")
+COIN_ORDER = (
+    "btc", "eth", "avax", "xrp", "ltc",
+    "usdc_eth", "usdt_eth", "usdc_avax", "usdt_avax", "sol",
+)
+
+# Token coins spend the parent chain's key. Gas is counted on the parent.
+TOKEN_PARENTS = {
+    "usdc_eth": "eth",
+    "usdt_eth": "eth",
+    "usdc_avax": "avax",
+    "usdt_avax": "avax",
+}
 
 COINS: dict[str, CoinSpec] = {
     "btc": CoinSpec(
@@ -138,6 +149,87 @@ COINS: dict[str, CoinSpec] = {
         default_max_per_tx=50_000,
         default_max_per_day=100_000,
         default_max_fee_rate=50,
+    ),
+    "usdc_eth": CoinSpec(
+        coin_id="usdc_eth",
+        name="USDC on Ethereum",
+        symbol="USDC",
+        unit="token",
+        status="tested",
+        default_network="sepolia",
+        networks=_nets(
+            NetworkSpec("sepolia", False, chain_id=11155111),
+            NetworkSpec("mainnet", True, chain_id=1),
+        ),
+        aliases={},
+        default_max_per_tx=10_000_000,  # 10 USDC
+        default_max_per_day=50_000_000,
+        default_max_fee_rate=10**15,
+    ),
+    "usdt_eth": CoinSpec(
+        coin_id="usdt_eth",
+        name="USDT on Ethereum",
+        symbol="USDT",
+        unit="token",
+        status="tested",
+        default_network="sepolia",
+        networks=_nets(
+            NetworkSpec("sepolia", False, chain_id=11155111),
+            NetworkSpec("mainnet", True, chain_id=1),
+        ),
+        aliases={},
+        default_max_per_tx=10_000_000,
+        default_max_per_day=50_000_000,
+        default_max_fee_rate=10**15,
+    ),
+    "usdc_avax": CoinSpec(
+        coin_id="usdc_avax",
+        name="USDC on Avalanche",
+        symbol="USDC",
+        unit="token",
+        status="tested",
+        default_network="fuji",
+        networks=_nets(
+            NetworkSpec("fuji", False, chain_id=43113),
+            NetworkSpec("mainnet", True, chain_id=43114),
+        ),
+        aliases={},
+        default_max_per_tx=10_000_000,
+        default_max_per_day=50_000_000,
+        default_max_fee_rate=10**15,
+    ),
+    "usdt_avax": CoinSpec(
+        coin_id="usdt_avax",
+        name="USDT on Avalanche",
+        symbol="USDT",
+        unit="token",
+        status="tested",
+        default_network="fuji",
+        networks=_nets(
+            NetworkSpec("fuji", False, chain_id=43113),
+            NetworkSpec("mainnet", True, chain_id=43114),
+        ),
+        aliases={},
+        default_max_per_tx=10_000_000,
+        default_max_per_day=50_000_000,
+        default_max_fee_rate=10**15,
+    ),
+    "sol": CoinSpec(
+        coin_id="sol",
+        name="Solana",
+        symbol="SOL",
+        unit="lamport",
+        status="experimental",
+        default_network="devnet",
+        networks=_nets(
+            NetworkSpec("devnet", False),
+            NetworkSpec("testnet", False),
+            NetworkSpec("mainnet", True),
+        ),
+        aliases={},
+        default_max_per_tx=10_000_000,  # 0.01 SOL
+        default_max_per_day=50_000_000,
+        default_max_fee_rate=100_000,
     ),
 }
 

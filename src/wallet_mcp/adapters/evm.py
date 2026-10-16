@@ -78,6 +78,13 @@ class UrlEvmRead:
     def get_transaction_count(self, address: str) -> int:
         return int(rpc_call(self.url, "eth_getTransactionCount", [address, "pending"]), 16)
 
+    def token_balance(self, token: str, holder: str) -> int:
+        data = "0x70a08231" + holder[2:].lower().zfill(64)
+        result = rpc_call(self.url, "eth_call", [{"to": token, "data": data}, "latest"])
+        if result in (None, "0x"):
+            return 0
+        return int(result, 16)
+
     def suggest_fees(self) -> tuple[int, int]:
         gas_price = int(rpc_call(self.url, "eth_gasPrice", []), 16)
         try:

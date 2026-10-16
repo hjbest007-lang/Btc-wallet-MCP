@@ -22,7 +22,15 @@ from .adapters.bitcoin import (
     esplora_url,
     open_watch_wallet,
 )
+from .adapters.erc20 import PARENT, Erc20Adapter, token_contract
 from .adapters.evm import EvmAdapter, UrlEvmRead, account_from_mnemonic, broadcast_raw, checksum, default_rpc
+from .adapters.solana import (
+    SolanaAdapter,
+    UrlSolanaRead,
+    default_rpc as sol_rpc,
+    keypair_from_mnemonic,
+    submit_transaction,
+)
 from .adapters.litecoin import EsploraLtc, FileIndex, LitecoinAdapter, default_esplora
 from .adapters.xrp import (
     UrlXrpRead,
@@ -241,12 +249,106 @@ def _ltc_cold(cfg: AppConfig, coin) -> ChainAdapter:
     )
 
 
+def build_token(coin_id: str):
+    parent = PARENT[coin_id]
+
+    def build(cfg: AppConfig) -> Bundle:
+        coin = cfg.coins[coin_id]
+        _guard_agent_has_no_cold_seed(cfg, parent)
+        _guard_agent_has_no_cold_seed(cfg, coin_id)
+        chain_id = coin.chain_id
+        if chain_id is None:
+            raise ConfigError(f"{coin_id} has no chain id for {coin.network}")
+        seed_path = cfg.hot_dir(parent) / "seed.enc"
+        try:
+            token = token_contract(coin_id, coin.network, cfg.env)
+        except AdapterError as exc:
+            raise ConfigError(str(exc)) from None
+        url = default_rpc(parent, coin.network, cfg.env, mainnet=coin.is_mainnet)
+        if not seed_path.exists():
+            hot = UnconfiguredHot(coin_id, coin.network, "token", False)
+            broadcaster = _refuse_broadcast
+        else:
+            account = account_from_mnemonic(_read_hot_secret(cfg, parent))
+            hot = Erc20Adapter(
+                coin_id=coin_id, network=coin.network, chain_id=chain_id, role="hot",
+                address=account.address, token=token, rpc=UrlEvmRead(url),
+                max_fee_rate=coin.max_fee_rate, private_key=account.key,
+            )
+
+            def broadcaster(raw, _url=url):
+                return broadcast_raw(_url, raw)
+
+        cold = _token_cold(cfg, coin, parent, token, url)
+        return Bundle(hot, cold, broadcaster)
+
+    return build
+
+
+def _token_cold(cfg: AppConfig, coin, parent: str, token: str, url: str) -> ChainAdapter:
+    path = cfg.cold_dir(coin.coin_id) / "watch.json"
+    if not path.exists():
+        path = cfg.cold_dir(parent) / "watch.json"
+    if not path.exists():
+        return UnconfiguredCold(coin.coin_id, coin.network, "token", False)
+    document = load_watch_file(path)
+    if document.get("kind") != "address":
+        raise ConfigError(f"{coin.coin_id} watch file must have kind address")
+    return Erc20Adapter(
+        coin_id=coin.coin_id, network=coin.network, chain_id=coin.chain_id, role="cold",
+        address=checksum(document["address"]), token=token, rpc=UrlEvmRead(url),
+        max_fee_rate=coin.max_fee_rate, private_key=None,
+    )
+
+
+def build_solana(cfg: AppConfig) -> Bundle:
+    coin = cfg.coins["sol"]
+    _guard_agent_has_no_cold_seed(cfg, "sol")
+    seed_path = cfg.hot_dir("sol") / "seed.enc"
+    if not seed_path.exists():
+        hot = UnconfiguredHot("sol", coin.network, "lamport", True)
+        broadcaster = _refuse_broadcast
+    else:
+        mnemonic = _read_hot_secret(cfg, "sol")
+        key = keypair_from_mnemonic(mnemonic)
+        url = sol_rpc(coin.network, cfg.env, mainnet=coin.is_mainnet)
+        hot = SolanaAdapter(
+            network=coin.network, role="hot", address=str(key.pubkey()),
+            rpc=UrlSolanaRead(url), max_fee_rate=coin.max_fee_rate, mnemonic=mnemonic,
+        )
+
+        def broadcaster(raw, _url=url):
+            return submit_transaction(_url, raw)
+
+    cold = _solana_cold(cfg, coin)
+    return Bundle(hot, cold, broadcaster)
+
+
+def _solana_cold(cfg: AppConfig, coin) -> ChainAdapter:
+    path = cfg.cold_dir("sol") / "watch.json"
+    if not path.exists():
+        return UnconfiguredCold("sol", coin.network, "lamport", True)
+    document = load_watch_file(path)
+    if document.get("kind") != "address":
+        raise ConfigError("sol watch file must have kind address")
+    url = sol_rpc(coin.network, cfg.env, mainnet=coin.is_mainnet)
+    return SolanaAdapter(
+        network=coin.network, role="cold", address=document["address"],
+        rpc=UrlSolanaRead(url), max_fee_rate=coin.max_fee_rate, mnemonic=None,
+    )
+
+
 FACTORIES = {
     "btc": build_bitcoin,
     "eth": build_evm("eth"),
     "avax": build_evm("avax"),
     "xrp": build_xrp,
     "ltc": build_ltc,
+    "usdc_eth": build_token("usdc_eth"),
+    "usdt_eth": build_token("usdt_eth"),
+    "usdc_avax": build_token("usdc_avax"),
+    "usdt_avax": build_token("usdt_avax"),
+    "sol": build_solana,
 }
 
 
