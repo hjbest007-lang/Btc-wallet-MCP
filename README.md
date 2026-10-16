@@ -224,7 +224,9 @@ A file that raises a ceiling without a valid HMAC is rejected at startup. Loweri
 
 ## Security model
 
-**Assets:** cold seeds (owner machine only), hot seeds, the funds on the hot wallets, the approval secret.
+The review notes for an external audit are in [SECURITY.md](SECURITY.md). Short version:
+
+**Assets:** cold seeds (owner machine only), hot seeds, the funds on the hot wallets, token balances on those hot keys, the approval secret.
 
 The server process should run as its **own OS user** (or its own machine or container). The agent user must not be able to read that user's environment (`/proc/<pid>/environ`), `config.json`, or `seed.enc`. The approval secret is never returned by a tool, never written to the config file, and never logged. Logs go to stderr and contain ids and amounts, not secrets. `audit.log` in the data directory records every prepare, approve, and send attempt the same way (mode `0600`). It does not store codes or secrets.
 
