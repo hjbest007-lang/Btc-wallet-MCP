@@ -2,6 +2,8 @@
 
 A config file can select a known network and can only *lower* limits freely.
 Raising a limit above the approved ceiling requires a human HMAC (see policy).
+The autonomous budget (``auto_max_per_tx`` / ``auto_max_per_day``) defaults to 0.
+Raising it requires its own HMAC, stored as ``auto_mac``.
 """
 from __future__ import annotations
 

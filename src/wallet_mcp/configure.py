@@ -83,7 +83,10 @@ def render_page(cfg, token: str, notice: str = "") -> str:
 <p class="warn">{html.escape(DUTCH_SUMMARY)}</p>
 <p>Only checked coins are loaded as MCP tools the next time the server starts.
 The cold wallet stays on your machine. This page cannot raise a limit: an increase
-is stored as a request until you run <code>wallet-mcp approve-limit</code>.</p>
+is stored as a request until you run <code>wallet-mcp approve-limit</code>.
+This page cannot change the autonomous spending budget
+(<code>auto_max_per_tx</code> / <code>auto_max_per_day</code>). That stays at 0
+until you raise it from a terminal.</p>
 {note}
 <form method="post" action="/">
   <input type="hidden" name="csrf" value="{html.escape(token)}">

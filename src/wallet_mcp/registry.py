@@ -395,11 +395,14 @@ class Runtime:
                 "max_per_tx": coin.max_per_tx,
                 "max_per_day": coin.max_per_day,
                 "max_fee_rate": coin.max_fee_rate,
+                "auto_max_per_tx": coin.auto_max_per_tx,
+                "auto_max_per_day": coin.auto_max_per_day,
                 "allowlist_enabled": bool(coin.allowlist),
                 "mainnet": coin.is_mainnet,
             }
             if coin.enabled and coin_id in self.gate.policies:
                 entry["spent_last_24h"] = self.gate.policies[coin_id].spent_last_24h()
+                entry["auto_spent_last_24h"] = self.gate.policies[coin_id].auto_spent_last_24h()
                 entry["sending_enabled"] = secret and self.hot[coin_id].can_sign
                 entry["hot_initialized"] = self.hot[coin_id].can_sign
                 entry["cold_watch_only"] = self.cold[coin_id].role == "cold" and not isinstance(
@@ -458,6 +461,21 @@ def _limit_provider(cfg: AppConfig, coin_id: str):
     return provider
 
 
+def _auto_limit_provider(cfg: AppConfig, coin_id: str):
+    def provider():
+        from .config import load_config
+        from .policy import PolicyError
+
+        try:
+            fresh = load_config(cfg.env)
+        except ConfigError as exc:
+            raise PolicyError(str(exc)) from None
+        coin = fresh.coins[coin_id]
+        return coin.auto_max_per_tx, coin.auto_max_per_day
+
+    return provider
+
+
 def build_runtime(cfg: AppConfig, factories: dict | None = None) -> Runtime:
     factories = factories or FACTORIES
     hot = {}
@@ -481,7 +499,7 @@ def build_runtime(cfg: AppConfig, factories: dict | None = None) -> Runtime:
         policies[coin_id] = Policy(
             coin_id, coin.network, coin.spec.unit, cfg.policy_dir(coin_id),
             _limit_provider(cfg, coin_id), ttl=coin.spec.confirm_ttl_seconds,
-            secret_provider=secret,
+            secret_provider=secret, auto_limits=_auto_limit_provider(cfg, coin_id),
         )
         ttl[coin_id] = coin.spec.confirm_ttl_seconds
     gate = PaymentGate(

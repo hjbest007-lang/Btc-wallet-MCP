@@ -5,6 +5,13 @@ per-tx limit, rolling 24h limit (amount + fee), human HMAC, single use, expiry,
 and lockout after repeated bad codes. The HMAC binds coin, network and role, so
 a code for one coin cannot approve another.
 
+An owner-granted autonomous budget is a second counter on the same ledger.
+Payments that fit ``auto_max_per_tx`` and the remaining ``auto_max_per_day``
+are reserved under the same file lock and may be broadcast without a
+per-payment code. They still count toward the hard daily limit. Anything
+above the budget keeps the human HMAC. The budget is an integer in the coin's
+base unit; this module does not consult a price.
+
 The 24h ledger and the lockout counter are sealed with the approval secret when
 one is configured. A writer who does not have the secret cannot zero the spend
 or clear the lockout without the next spend failing closed.
@@ -65,6 +72,15 @@ class LimitRequest:
     created: float
 
 
+@dataclass
+class AutoBudgetRequest:
+    request_id: str
+    coin: str
+    auto_max_per_tx: int
+    auto_max_per_day: int
+    created: float
+
+
 def _hmac(secret: str, msg: bytes) -> str:
     if not secret or len(secret) < MIN_APPROVAL_SECRET_LEN:
         raise PolicyError("approval secret too short")
@@ -117,6 +133,18 @@ def limits_mac(secret: str, coin: str, approved_tx: int, approved_day: int) -> s
     return _hmac(secret, msg)
 
 
+def auto_approval_code(secret: str, request_id: str, coin: str, auto_tx: int, auto_day: int) -> str:
+    """12-hex code for one queued autonomous-budget increase. Not a payment code."""
+    msg = f"auto|{request_id}|{coin}|{auto_tx}|{auto_day}".encode()
+    return _hmac(secret, msg)[:12]
+
+
+def auto_mac(secret: str, coin: str, auto_tx: int, auto_day: int) -> str:
+    """Full HMAC stored next to a non-zero autonomous budget. The agent cannot forge it."""
+    msg = f"automac|{coin}|{auto_tx}|{auto_day}".encode()
+    return _hmac(secret, msg)
+
+
 def _matches(expected: str, given: str) -> bool:
     from btc_wallet_mcp.guard import constant_time_equals
 
@@ -135,6 +163,7 @@ class Policy:
         ttl: int = 600,
         max_failed: int = 5,
         secret_provider: Callable[[], str | None] | None = None,
+        auto_limits: Callable[[], tuple[int, int]] | None = None,
     ) -> None:
         self.coin = coin
         self.network = network
@@ -142,6 +171,7 @@ class Policy:
         self.directory = Path(directory)
         self.directory.mkdir(parents=True, exist_ok=True)
         self.limits = limits
+        self.auto_limits = auto_limits
         self.now = now
         self.ttl = ttl
         self.max_failed = max_failed
@@ -224,28 +254,71 @@ class Policy:
         with exclusive_lock(self.directory):
             return self._spent()
 
+    def auto_spent_last_24h(self) -> int:
+        with exclusive_lock(self.directory):
+            return self._auto_spent()
+
+    def _entry_parts(self, entry: object) -> tuple[float, int, bool]:
+        if not isinstance(entry, dict):
+            raise PolicyError("ledger integrity check failed")
+        ts = entry.get("ts")
+        amount = entry.get("total")
+        if isinstance(ts, bool) or not isinstance(ts, (int, float)):
+            raise PolicyError("ledger integrity check failed")
+        if isinstance(amount, bool) or not isinstance(amount, int) or amount < 0 or amount > MAX_UNIT:
+            raise PolicyError("ledger integrity check failed")
+        flag = entry.get("auto", False)
+        if not isinstance(flag, bool):
+            raise PolicyError("ledger integrity check failed")
+        return float(ts), amount, flag
+
     def _spent(self) -> int:
+        return self._sum(auto_only=False)
+
+    def _auto_spent(self) -> int:
+        return self._sum(auto_only=True)
+
+    def _sum(self, *, auto_only: bool) -> int:
         cutoff = self.now() - DAY
         total = 0
         for entry in self._ledger_entries():
-            if not isinstance(entry, dict):
-                raise PolicyError("ledger integrity check failed")
-            ts = entry.get("ts")
-            amount = entry.get("total")
-            if isinstance(ts, bool) or not isinstance(ts, (int, float)):
-                raise PolicyError("ledger integrity check failed")
-            if isinstance(amount, bool) or not isinstance(amount, int) or amount < 0 or amount > MAX_UNIT:
-                raise PolicyError("ledger integrity check failed")
+            ts, amount, is_auto = self._entry_parts(entry)
             # A backdated timestamp would hide a spend. Sealing stops a writer
             # without the secret from doing that. Future timestamps still fall
             # inside ``ts >= cutoff`` and therefore still count.
-            if ts >= cutoff:
+            if ts >= cutoff and (not auto_only or is_auto):
                 total += amount
         return total
 
     def _caps(self) -> tuple[int, int, frozenset[str]]:
         max_tx, max_day, allow = self.limits()
         return max_tx, max_day, frozenset(allow)
+
+    def _auto_caps(self) -> tuple[int, int]:
+        if self.auto_limits is None:
+            return 0, 0
+        try:
+            found = self.auto_limits()
+        except PolicyError:
+            raise
+        except Exception as exc:
+            raise PolicyError(str(exc) or "auto budget failed integrity check") from exc
+        if not isinstance(found, tuple) or len(found) != 2:
+            raise PolicyError("auto budget failed integrity check")
+        auto_tx, auto_day = found
+        for value in (auto_tx, auto_day):
+            if isinstance(value, bool) or not isinstance(value, int) or value < 0 or value > MAX_UNIT:
+                raise PolicyError("auto budget failed integrity check")
+        return auto_tx, auto_day
+
+    def _within_auto(self, total: int) -> bool:
+        """True when ``total`` fits the owner-granted budget. Zero means the feature is off."""
+        auto_tx, auto_day = self._auto_caps()
+        if auto_tx < 1 or auto_day < 1:
+            return False
+        if total > auto_tx:
+            return False
+        return self._auto_spent() + total <= auto_day
 
     def _bounded(self, value: object, label: str) -> int:
         if not isinstance(value, int) or isinstance(value, bool) or value > MAX_UNIT:
@@ -373,7 +446,51 @@ class Policy:
             self._append(pending, "")
             return pending
 
-    def _append(self, pending: Pending, txid: str) -> None:
+    def reserve_auto(self, confirm_id: str) -> Pending | None:
+        """Reserve one hot payment against the autonomous budget, before broadcast.
+
+        Returns the pending payment when it fit and was recorded with
+        ``auto`` set. Returns None when it does not fit, leaving the pending
+        payment in place for a human approval code. The lock covers the
+        check and the append so two payments cannot both pass the same
+        residual budget.
+        """
+        with exclusive_lock(self.directory):
+            return self._reserve_auto(confirm_id, parent=None, parent_fee=0)
+
+    def reserve_auto_with_parent(self, confirm_id: str, parent: Policy, parent_fee: int) -> Pending | None:
+        """Same as ``reserve_auto``, and reserve the parent coin's gas first.
+
+        The parent directory is locked before this coin so a native spend of
+        the parent and a token auto-spend cannot deadlock.
+        """
+        with exclusive_lock(parent.directory):
+            with exclusive_lock(self.directory):
+                return self._reserve_auto(confirm_id, parent=parent, parent_fee=parent_fee)
+
+    def _reserve_auto(self, confirm_id: str, parent: Policy | None, parent_fee: int) -> Pending | None:
+        pending = self._get_pending(confirm_id)
+        if pending.coin != self.coin:
+            raise PolicyError("confirm_id is for a different coin")
+        if pending.role != "hot":
+            raise PolicyError("only the hot wallet can spend; cold is watch-only and cannot sign")
+        self._check_total(pending.amount, pending.fee)
+        total = pending.amount + pending.fee
+        if not self._within_auto(total) or self._secret() is None:
+            return None
+        if parent is not None:
+            parent._check_total(0, parent_fee)
+            if parent._secret() is None or not parent._within_auto(parent_fee):
+                return None
+        self._discard(confirm_id)
+        self._append(pending, "", auto=True)
+        if parent is not None:
+            parent._note_external_unlocked(
+                "", parent_fee, f"gas for {self.coin}", confirm_id=pending.confirm_id, auto=True,
+            )
+        return pending
+
+    def _append(self, pending: Pending, txid: str, *, auto: bool = False) -> None:
         ledger = self._ledger_entries()
         ledger.append(
             {
@@ -384,6 +501,7 @@ class Policy:
                 "memo": pending.memo,
                 "coin": self.coin,
                 "confirm_id": pending.confirm_id,
+                "auto": bool(auto),
             }
         )
         self._write_ledger(ledger)
@@ -397,35 +515,40 @@ class Policy:
                     break
             self._write_ledger(ledger)
 
-    def note_external_fee(self, txid: str, fee: int, memo: str, *, confirm_id: str = "") -> None:
+    def note_external_fee(self, txid: str, fee: int, memo: str, *, confirm_id: str = "", auto: bool = False) -> None:
         """Record gas paid by a parent chain for a token transfer.
 
         The token ledger counts the token amount. This entry counts the native
         fee against the parent coin's daily limit. It does not touch a pending
         payment. The row is sealed with the same ledger MAC as a native spend,
         and it is written before broadcast so two token sends cannot both pass
-        the parent cap.
+        the parent cap. ``auto`` marks gas that was spent inside the parent's
+        autonomous budget; it still counts toward the parent's hard daily limit.
         """
         with exclusive_lock(self.directory):
-            fee = self._bounded(fee, "fee")
-            if fee <= 0:
-                raise PolicyError("fee must be a non-negative integer")
-            try:
-                memo = assert_safe_memo(memo)
-            except GuardError as exc:
-                raise PolicyError(str(exc)) from None
-            self._check_total(0, fee)
-            ledger = self._ledger_entries()
-            ledger.append({
-                "ts": self.now(),
-                "txid": txid,
-                "address": "gas",
-                "total": fee,
-                "memo": memo,
-                "coin": self.coin,
-                "confirm_id": confirm_id,
-            })
-            self._write_ledger(ledger)
+            self._note_external_unlocked(txid, fee, memo, confirm_id=confirm_id, auto=auto)
+
+    def _note_external_unlocked(self, txid: str, fee: int, memo: str, *, confirm_id: str = "", auto: bool = False) -> None:
+        fee = self._bounded(fee, "fee")
+        if fee <= 0:
+            raise PolicyError("fee must be a non-negative integer")
+        try:
+            memo = assert_safe_memo(memo)
+        except GuardError as exc:
+            raise PolicyError(str(exc)) from None
+        self._check_total(0, fee)
+        ledger = self._ledger_entries()
+        ledger.append({
+            "ts": self.now(),
+            "txid": txid,
+            "address": "gas",
+            "total": fee,
+            "memo": memo,
+            "coin": self.coin,
+            "confirm_id": confirm_id,
+            "auto": bool(auto),
+        })
+        self._write_ledger(ledger)
 
     def consume(self, pending: Pending, txid: str) -> None:
         with exclusive_lock(self.directory):

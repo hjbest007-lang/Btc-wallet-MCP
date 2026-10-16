@@ -19,13 +19,13 @@
 Every coin starts on a **test network** (Bitcoin: **signet**). Do not treat a
 green test suite as a security review.
 
-A small **multi-coin hot wallet** exposed as an **MCP stdio server**. An AI agent can pay for things online, but **only after a human approves that exact payment**. The agent's spending key is separate from the owner's savings.
+A small **multi-coin hot wallet** exposed as an **MCP stdio server**. An AI agent can pay for things online. **By default every payment needs a human approval code.** The owner can grant a small per-coin autonomous budget; a payment inside that budget is sent without a code, and anything above it still needs `wallet-mcp approve`. The agent's spending key is separate from the owner's savings.
 
 The original Bitcoin-only command, `btc-wallet-mcp`, is still there and behaves as before (signet, BIP84, the same approval code). New deployments should use `wallet-mcp`.
 
 ## Vision
 
-The agent earns and pays for services on the owner's behalf. It spends from a **hot** key with a low per-payment limit and a low daily limit. The owner tops that key up from a **cold** wallet that never lives on the agent's machine. Amounts above the limit, and any increase of the limit, need a human yes that the agent cannot produce. See [ROADMAP.md](ROADMAP.md).
+The agent earns and pays for services on the owner's behalf. It spends from a **hot** key with a low per-payment limit and a low daily limit. The owner tops that key up from a **cold** wallet that never lives on the agent's machine. Amounts above the limit, and any increase of the limit or of the autonomous budget, need a human yes that the agent cannot produce. See [ROADMAP.md](ROADMAP.md). The budget is an integer in the coin's base unit. There is no price oracle.
 
 ## Cold and hot, per coin
 
@@ -33,7 +33,7 @@ The agent earns and pays for services on the owner's behalf. It spends from a **
 |---|---|---|
 | Where the secret lives | Only on the owner's machine | On the server the agent calls |
 | What the agent server stores | A watch-only xpub or address | An encrypted hot seed |
-| Can the server sign? | No. There is no cold send tool | Yes, after a per-payment approval code, inside the limits |
+| Can the server sign? | No. There is no cold send tool, and cold never auto-spends | Yes, after a per-payment approval code, or inside an owner-granted autonomous budget. Always inside the hard limits |
 | What bounds the loss | The cold key is not on this host | The balance the owner deposited, and the daily limit |
 
 Top-ups are ordinary transfers the owner sends from their own cold wallet to the hot receive address. This server does not broadcast those top-ups.
@@ -113,13 +113,15 @@ For each enabled coin `<coin>` (`btc`, `eth`, `avax`, `xrp`, `ltc`):
 | `<coin>_hot_get_address` | Hot receive address (the top-up destination) |
 | `<coin>_hot_get_balance` | Hot balance in the coin's base unit |
 | `<coin>_cold_get_address` / `<coin>_cold_get_balance` | Watch-only cold view. There is no cold send |
-| `<coin>_prepare_payment(address, amount, memo)` | Builds an unsigned payment, checks limits, returns `confirm_id` and fee. Sends nothing |
-| `<coin>_send_payment(confirm_id, approval_code)` | Signs and broadcasts only with the human code for that exact payment |
+| `<coin>_prepare_payment(address, amount, memo)` | Builds a payment and checks limits. Inside the autonomous budget it broadcasts and returns `txid`. Above that budget it sends nothing and returns `confirm_id` |
+| `<coin>_send_payment(confirm_id, approval_code)` | Signs and broadcasts a prepared payment that was above the autonomous budget. Requires the human code for that exact payment |
 | `btc_list_transactions` | Bitcoin only |
 
 `amount` is an integer in the base unit (sats, wei, drops, litoshis).
 
 ### Approval flow
+
+A payment inside the owner's autonomous budget does not use this flow. `prepare_payment` broadcasts it and the webhook is only a notification (`auto_spent`). Everything else:
 
 1. The agent calls `<coin>_prepare_payment` and gets `confirm_id`, amount, and fee.
 2. You run, in your own terminal: `wallet-mcp approve --coin btc <confirm_id>`.
@@ -195,7 +197,7 @@ Put the approval secret in the server user's environment (or type it into `walle
 
 ## Configuration
 
-File: `$WALLET_MCP_DATA_DIR/config.json` (default `~/.wallet-mcp/config.json`). One block per coin: `enabled`, `network`, `max_per_tx`, `max_per_day`, `max_fee_rate`, optional `allowlist`. Unknown coins and unknown networks are rejected. Chain ids are not in the file; they come from the code.
+File: `$WALLET_MCP_DATA_DIR/config.json` (default `~/.wallet-mcp/config.json`). One block per coin: `enabled`, `network`, `max_per_tx`, `max_per_day`, `max_fee_rate`, optional `allowlist`, `auto_max_per_tx`, `auto_max_per_day`, and `auto_mac` when the autonomous budget is on. Unknown coins and unknown networks are rejected. Chain ids are not in the file; they come from the code.
 
 | Env | Default | |
 |---|---|---|
@@ -203,7 +205,7 @@ File: `$WALLET_MCP_DATA_DIR/config.json` (default `~/.wallet-mcp/config.json`). 
 | `WALLET_MCP_MODE` | `owner` | `agent` refuses cold-seed creation and refuses to start if a cold seed is present |
 | `WALLET_MCP_PASSPHRASE` | – | decrypts hot seeds (min 12 chars) |
 | `WALLET_MCP_APPROVAL_SECRET` | – | without it, sending is disabled |
-| `WALLET_MCP_APPROVAL_WEBHOOK_URL` | – | optional HTTPS (or localhost HTTP) POST when a payment is waiting for approval. Failure is logged and does not block prepare. The body has no secret and no approval code |
+| `WALLET_MCP_APPROVAL_WEBHOOK_URL` | – | optional HTTPS (or localhost HTTP) POST when a payment is waiting for approval, and a notification when one was sent inside the autonomous budget (`event` is `auto_spent`). Failure is logged and does not block the payment. The body has no secret and no approval code |
 | `WALLET_MCP_<COIN>_ALLOW_MAINNET` | – | must be `I_UNDERSTAND_REAL_MONEY` to enable that coin on mainnet |
 | `WALLET_MCP_BTC_ESPLORA_URL` | mempool.space for the network | https required on mainnet |
 | `WALLET_MCP_ETH_RPC_URL` / `WALLET_MCP_AVAX_RPC_URL` / `WALLET_MCP_XRP_RPC_URL` / `WALLET_MCP_LTC_ESPLORA_URL` | public testnet endpoints | https, except localhost |
@@ -222,6 +224,28 @@ Default hot limits (base units, amount **plus** fee):
 
 A file that raises a ceiling without a valid HMAC is rejected at startup. Lowering a limit does not need the secret. The web UI cannot raise one.
 
+### Autonomous budget
+
+Per coin, `auto_max_per_tx` and `auto_max_per_day` are integers in that coin's **base unit** (sat, wei, drop, litoshi, token base unit, lamport). The default is `0` / `0`, which turns the feature off. There is no price feed: 10 000 sats stays 10 000 sats if the market moves.
+
+Both numbers must be less than or equal to `max_per_tx` and `max_per_day`. A non-zero pair is sealed with `auto_mac`, an HMAC of the approval secret, the coin, and those two numbers (the same idea as `limits_mac`). A file whose numbers do not match `auto_mac` is rejected at startup and the next spend fails closed. The MCP server has no tool that writes these fields. The configure page cannot write them either.
+
+A hot payment whose amount **plus fee** fits `auto_max_per_tx` and the remaining `auto_max_per_day` is reserved on the sealed ledger under the same file lock as a normal send, then broadcast from `prepare_payment`. No approval code is required. The row is marked `auto` and still counts toward `max_per_day`. The audit log records `"auto": true`. The webhook fires as `auto_spent` (a notification). Allowlist, fee cap, mainnet opt-in, and address/memo checks still apply. A cold wallet never takes this path. A token payment also has to fit the parent coin's autonomous budget, because the gas is native currency.
+
+Anything above the budget falls back to `wallet-mcp approve`. Lowering the budget applies immediately and reseals `auto_mac`. Setting both numbers to `0` turns the feature off and clears the MAC. Raising it is a queued request plus a TTY approval, same shape as `approve-limit`.
+
+On Windows, in `cmd.exe`, from the virtualenv Scripts directory (or after `.\.venv\Scripts\activate.bat`). Amounts below are satoshis. `approve-limit` and `approve-auto` must be an interactive window: they refuse a pipe, ask you to type `yes`, and use `WALLET_MCP_APPROVAL_SECRET` from the environment or prompt for it. The first command prints the id the second command needs. This example raises the hard daily cap first, because 150000 is above the default 100000 sat day limit:
+
+```bat
+set WALLET_MCP_APPROVAL_SECRET=the-same-secret-the-server-uses
+wallet-mcp request-limit --coin btc --max-per-tx 50000 --max-per-day 150000
+wallet-mcp approve-limit lim_THE_ID_PRINTED_ABOVE
+wallet-mcp request-auto --coin btc --auto-max-per-tx 20000 --auto-max-per-day 150000
+wallet-mcp approve-auto aut_THE_ID_PRINTED_ABOVE
+```
+
+If `wallet-mcp` is not on `PATH`, call `.\.venv\Scripts\wallet-mcp.exe` with the same arguments. Skip the `request-limit` / `approve-limit` pair when the autonomous numbers are already within the hard limits. More detail is in [docs/auto-budget.md](docs/auto-budget.md).
+
 ## Security model
 
 The review notes for an external audit are in [SECURITY.md](SECURITY.md). A code review from 16 October 2026 is written up in [docs/security/AUDIT-2026-10-16.md](docs/security/AUDIT-2026-10-16.md). It is not a substitute for an independent professional audit. Do not treat a green CI run as one.
@@ -232,9 +256,9 @@ The server process should run as its **own OS user** (or its own machine or cont
 
 | Threat | What holds | What remains |
 |---|---|---|
-| Agent (or prompt injection) tries to pay by itself | `send_payment` needs a per-payment HMAC. The spend is reserved under a file lock before broadcast. Five bad codes lock the coin. Addresses and memos on the approval screen cannot contain control characters or bidi marks | A human who approves without reading the address and amount. A failed broadcast still counts against the daily limit |
+| Agent (or prompt injection) tries to pay by itself | Above the autonomous budget, `send_payment` needs a per-payment HMAC. Inside it, prepare reserves the spend under a file lock before broadcast and the total cannot pass `auto_max_per_tx` / `auto_max_per_day`. Five bad codes lock the coin. Addresses and memos cannot contain control characters or bidi marks. Cold wallets never auto-spend | The owner granted a budget larger than they meant. A human who approves a payment they did not read. A failed broadcast still counts against the daily limit and the auto budget |
 | Agent tries to spend the cold wallet | Cold tools are watch-only. `execute` refuses a non-hot wallet. Agent mode will not boot if a cold seed file is on disk. A Bitcoin WIF or secret descriptor is rejected as a watch-only import. `hw-sign` is not an MCP tool and refuses agent mode before it talks to a device | Owner copies `owner-cold/` onto the agent host and ignores the warning, or confirms a hardware prompt they did not read |
-| Agent raises its own limit | Increases need `approve-limit` and an HMAC stored next to the ceiling. The configure UI cannot complete an increase. A limit request expires after 24 hours | Same OS user as the server, so the agent can read the secret |
+| Agent raises its own limit or its autonomous budget | Limit increases need `approve-limit` and `limits_mac`. Budget increases need `request-auto` plus TTY `approve-auto` and `auto_mac`. The configure UI and the MCP tools cannot complete either increase. A request expires after 24 hours. A tampered `auto_mac` fails closed | Same OS user as the server, so the agent can read the secret and forge a MAC. Replacing `config.json` with an older file the owner had approved restores that older budget |
 | Agent calls a coin that was not selected | That adapter is not registered. The tool name does not exist | – |
 | Tampered unsigned payload | The adapter re-checks address, amount, and fee against the approved payment before sign | A bug in a new adapter; keep the "do not override `execute`" test |
 | Agent rewrites the spend ledger | The ledger and pending state are HMAC-sealed with the approval secret. A bad MAC fails closed | Deleting the ledger file starts a fresh 24-hour window. Someone who can delete it can usually read the secret too |

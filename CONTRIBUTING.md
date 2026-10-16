@@ -1,6 +1,6 @@
 # Contributing
 
-This is a multi-coin hot wallet behind an MCP server. Every payment needs a human approval code, and every coin goes through the same limit gate. Safety beats features.
+This is a multi-coin hot wallet behind an MCP server. Every payment needs a human approval code, except a payment that fits an owner-granted autonomous budget. Every coin goes through the same limit gate. Safety beats features.
 
 The Bitcoin-only command `btc-wallet-mcp` stays as it is. New coin work belongs in `wallet_mcp`.
 
@@ -10,9 +10,9 @@ The Bitcoin-only command `btc-wallet-mcp` stays as it is. New coin work belongs 
 - Bitcoin keys, descriptors, and signing stay in BDK (`bdkpython`). Seed encryption stays in `cryptography`.
 - Other coins use a maintained library (`eth-account`, `xrpl-py`, `embit`). Do not invent a signature scheme.
 - No tool may return a seed, xprv, passphrase, private key, or approval secret.
-- Adapters must not override `ChainAdapter.execute`. They implement `sign` and receive a broadcaster only from the payment gate, after approval.
-- Cold wallets are watch-only on the agent server. A change that lets the server sign a cold key, or that exposes `hw-sign` as an MCP tool, is not welcome. Hardware signing stays on the owner TTY and still requires a physical device confirmation.
-- The configure UI may lower limits. It must not raise them without `approve-limit`.
+- Adapters must not override `ChainAdapter.execute`. They implement `sign` and receive a broadcaster only from the payment gate, after approval or after an autonomous-budget reservation.
+- Cold wallets are watch-only on the agent server. A change that lets the server sign a cold key, lets a cold wallet auto-spend, or exposes `hw-sign` as an MCP tool, is not welcome. Hardware signing stays on the owner TTY and still requires a physical device confirmation.
+- The configure UI may lower limits. It must not raise them without `approve-limit`. It must not set `auto_max_per_tx` or `auto_max_per_day`. Raising that budget is `request-auto` plus TTY `approve-auto`.
 - A change to `policy.py`, `gate.py`, `keystore.py`, or the approval flow needs a test and a short note in the PR about the threat model (see the Security model table in the README).
 - Keep dependencies minimal. A new one needs a reason in the PR.
 

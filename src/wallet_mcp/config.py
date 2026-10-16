@@ -16,10 +16,21 @@ from pathlib import Path
 
 from .coins import COIN_ORDER, COINS, TOKEN_PARENTS, CoinSpec, mainnet_opted_in
 from .disclaimer import MAINNET_WARNING
-from .policy import LimitRequest, PolicyError, limit_approval_code, limits_mac
+from btc_wallet_mcp.guard import MAX_UNIT
+
+from .policy import (
+    AutoBudgetRequest,
+    LimitRequest,
+    PolicyError,
+    auto_approval_code,
+    auto_mac,
+    limit_approval_code,
+    limits_mac,
+)
 from .util import atomic_json, ensure_dir
 
 LIMIT_REQUESTS = "limit-requests.json"
+AUTO_REQUESTS = "auto-requests.json"
 LIMIT_TTL = 86_400
 
 
@@ -51,6 +62,9 @@ class CoinConfig:
     approved_max_per_tx: int
     approved_max_per_day: int
     limits_mac: str
+    auto_max_per_tx: int
+    auto_max_per_day: int
+    auto_mac: str
 
     @property
     def coin_id(self) -> str:
@@ -104,6 +118,9 @@ def default_raw() -> dict:
             "approved_max_per_tx": spec.default_max_per_tx,
             "approved_max_per_day": spec.default_max_per_day,
             "limits_mac": "",
+            "auto_max_per_tx": 0,
+            "auto_max_per_day": 0,
+            "auto_mac": "",
         }
     return {"version": 1, "coins": coins}
 
@@ -130,7 +147,8 @@ def _merge_raw(document: dict) -> dict:
         if current.get("network"):
             slot["network"] = str(current["network"])
         for key in ("max_per_tx", "max_per_day", "max_fee_rate",
-                    "approved_max_per_tx", "approved_max_per_day"):
+                    "approved_max_per_tx", "approved_max_per_day",
+                    "auto_max_per_tx", "auto_max_per_day"):
             if key in current and current[key] is not None:
                 slot[key] = current[key]
         if "allowlist" in current and current["allowlist"] is not None:
@@ -139,6 +157,8 @@ def _merge_raw(document: dict) -> dict:
             slot["allowlist"] = [str(item).strip() for item in current["allowlist"] if str(item).strip()]
         if current.get("limits_mac"):
             slot["limits_mac"] = str(current["limits_mac"])
+        if current.get("auto_mac"):
+            slot["auto_mac"] = str(current["auto_mac"])
     return base
 
 
@@ -164,6 +184,33 @@ def _verify_limits(coin_id: str, slot: dict, secret: str | None) -> None:
             raise ConfigError(
                 f"{coin_id}: limit increase is not approved; run `wallet-mcp approve-limit`"
             )
+    _verify_auto(coin_id, slot, secret, tx, day)
+
+
+def _verify_auto(coin_id: str, slot: dict, secret: str | None, tx: int, day: int) -> None:
+    """A non-zero autonomous budget must match ``auto_mac`` and fit under the hard limits.
+
+    Zero and zero is the default and needs no MAC. Any other pair is spendable
+    authority, so a missing or mismatched MAC fails closed.
+    """
+    auto_tx = _nonneg_int(slot["auto_max_per_tx"], f"{coin_id} auto_max_per_tx")
+    auto_day = _nonneg_int(slot["auto_max_per_day"], f"{coin_id} auto_max_per_day")
+    if auto_tx > MAX_UNIT or auto_day > MAX_UNIT:
+        raise ConfigError(f"{coin_id}: auto budget is too large")
+    slot["auto_max_per_tx"], slot["auto_max_per_day"] = auto_tx, auto_day
+    if auto_tx > tx or auto_day > day:
+        raise ConfigError(f"{coin_id}: auto budget exceeds max_per_tx / max_per_day")
+    if auto_tx == 0 and auto_day == 0:
+        return
+    mac = slot.get("auto_mac") or ""
+    try:
+        expected = auto_mac(secret or "", coin_id, auto_tx, auto_day)
+    except PolicyError:
+        expected = ""
+    if not mac or not expected or not hmac_equal(expected, mac):
+        raise ConfigError(
+            f"{coin_id}: auto budget is not approved; run `wallet-mcp approve-auto`"
+        )
 
 
 def hmac_equal(expected: str, given: str) -> bool:
@@ -207,6 +254,9 @@ def load_config(env=None, *, require_mainnet_flag: bool = True) -> AppConfig:
             approved_max_per_tx=slot["approved_max_per_tx"],
             approved_max_per_day=slot["approved_max_per_day"],
             limits_mac=slot["limits_mac"],
+            auto_max_per_tx=slot["auto_max_per_tx"],
+            auto_max_per_day=slot["auto_max_per_day"],
+            auto_mac=slot.get("auto_mac") or "",
         )
         if require_mainnet_flag and cfg.enabled and cfg.is_mainnet and not mainnet_opted_in(env, coin_id):
             raise ConfigError(f"{coin_id} mainnet requires {_mainnet_hint(coin_id)}")
@@ -275,6 +325,7 @@ def propose_limits(cfg: AppConfig, coin_id: str, max_per_tx: int, max_per_day: i
     if max_per_tx <= current_tx and max_per_day <= current_day:
         slot["max_per_tx"] = max_per_tx
         slot["max_per_day"] = max_per_day
+        _clamp_auto_to_limits(cfg, coin_id)
         save_config(cfg)
         return "applied", None
     request = LimitRequest("lim_" + secrets.token_hex(8), coin_id, max_per_tx, max_per_day, now())
@@ -335,8 +386,130 @@ def approve_limits(cfg: AppConfig, request_id: str, code: str, secret: str | Non
         slot["limits_mac"] = limits_mac(secret, request.coin, approved_tx, approved_day)
     else:
         slot["limits_mac"] = ""
+    _clamp_auto_to_limits(cfg, request.coin)
     save_config(cfg)
     blob = _read_requests(cfg)
     blob.pop(request_id, None)
     atomic_json(_requests_path(cfg), blob)
+    return request
+
+
+def _seal_auto(slot: dict, coin_id: str, auto_tx: int, auto_day: int, secret: str | None) -> None:
+    slot["auto_max_per_tx"] = auto_tx
+    slot["auto_max_per_day"] = auto_day
+    if auto_tx == 0 and auto_day == 0:
+        slot["auto_mac"] = ""
+        return
+    if not secret:
+        raise ConfigError("WALLET_MCP_APPROVAL_SECRET is not set")
+    slot["auto_mac"] = auto_mac(secret, coin_id, auto_tx, auto_day)
+
+
+def _clamp_auto_to_limits(cfg: AppConfig, coin_id: str) -> None:
+    """Keep the autonomous budget inside the hard limits.
+
+    Lowering is the safe direction. When the approval secret is available the
+    new pair is resealed. When it is not, the budget is turned off so a file
+    with a stale MAC still loads.
+    """
+    slot = cfg.raw["coins"][coin_id]
+    auto_tx = min(int(slot.get("auto_max_per_tx") or 0), int(slot["max_per_tx"]))
+    auto_day = min(int(slot.get("auto_max_per_day") or 0), int(slot["max_per_day"]))
+    if auto_tx == int(slot.get("auto_max_per_tx") or 0) and auto_day == int(slot.get("auto_max_per_day") or 0):
+        return
+    secret = cfg.env.get("WALLET_MCP_APPROVAL_SECRET")
+    if auto_tx > 0 or auto_day > 0:
+        if not secret:
+            auto_tx, auto_day = 0, 0
+    _seal_auto(slot, coin_id, auto_tx, auto_day, secret)
+
+
+def propose_auto_budget(cfg: AppConfig, coin_id: str, auto_tx: int, auto_day: int, now=time.time):
+    """Lower an autonomous budget immediately. Any increase becomes a pending human approval.
+
+    Returns ``("applied", None)``, ``("unchanged", None)`` or ``("pending", request)``.
+    The budget has to fit under ``max_per_tx`` and ``max_per_day``. There is no
+    price conversion: both numbers are base units.
+    """
+    if coin_id not in COINS:
+        raise ConfigError(f"unknown coin {coin_id}")
+    auto_tx = _nonneg_int(auto_tx, "auto_max_per_tx")
+    auto_day = _nonneg_int(auto_day, "auto_max_per_day")
+    if auto_tx > MAX_UNIT or auto_day > MAX_UNIT:
+        raise ConfigError("auto budget is too large")
+    slot = cfg.raw["coins"][coin_id]
+    max_tx = int(slot["max_per_tx"])
+    max_day = int(slot["max_per_day"])
+    if auto_tx > max_tx or auto_day > max_day:
+        raise ConfigError(
+            "auto budget must be <= max_per_tx / max_per_day; "
+            "raise that limit first with `wallet-mcp request-limit`"
+        )
+    current_tx = int(slot.get("auto_max_per_tx") or 0)
+    current_day = int(slot.get("auto_max_per_day") or 0)
+    if auto_tx == current_tx and auto_day == current_day:
+        return "unchanged", None
+    if auto_tx <= current_tx and auto_day <= current_day:
+        _seal_auto(slot, coin_id, auto_tx, auto_day, cfg.env.get("WALLET_MCP_APPROVAL_SECRET"))
+        save_config(cfg)
+        return "applied", None
+    request = AutoBudgetRequest("aut_" + secrets.token_hex(8), coin_id, auto_tx, auto_day, now())
+    _write_auto_request(cfg, request)
+    return "pending", request
+
+
+def _auto_requests_path(cfg: AppConfig) -> Path:
+    return cfg.data_dir / AUTO_REQUESTS
+
+
+def _read_auto_requests(cfg: AppConfig) -> dict:
+    path = _auto_requests_path(cfg)
+    if not path.exists():
+        return {}
+    return json.loads(path.read_text())
+
+
+def _write_auto_request(cfg: AppConfig, request: AutoBudgetRequest) -> None:
+    blob = _read_auto_requests(cfg)
+    blob[request.request_id] = {
+        "request_id": request.request_id,
+        "coin": request.coin,
+        "auto_max_per_tx": request.auto_max_per_tx,
+        "auto_max_per_day": request.auto_max_per_day,
+        "created": request.created,
+    }
+    ensure_dir(cfg.data_dir)
+    atomic_json(_auto_requests_path(cfg), blob)
+
+
+def get_auto_request(cfg: AppConfig, request_id: str, now=time.time) -> AutoBudgetRequest:
+    blob = _read_auto_requests(cfg)
+    if request_id not in blob:
+        raise ConfigError("unknown auto budget request")
+    request = AutoBudgetRequest(**blob[request_id])
+    if now() - request.created > LIMIT_TTL:
+        raise ConfigError("auto budget request expired")
+    return request
+
+
+def approve_auto_budget(cfg: AppConfig, request_id: str, code: str, secret: str | None) -> AutoBudgetRequest:
+    """Apply a pending autonomous-budget increase after the human presents the matching code."""
+    request = get_auto_request(cfg, request_id)
+    if not secret:
+        raise ConfigError("WALLET_MCP_APPROVAL_SECRET is not set")
+    expected = auto_approval_code(
+        secret, request.request_id, request.coin, request.auto_max_per_tx, request.auto_max_per_day,
+    )
+    if not hmac_equal(expected, (code or "").strip().lower()):
+        raise ConfigError("invalid auto budget approval code")
+    slot = cfg.raw["coins"][request.coin]
+    max_tx = int(slot["max_per_tx"])
+    max_day = int(slot["max_per_day"])
+    if request.auto_max_per_tx > max_tx or request.auto_max_per_day > max_day:
+        raise ConfigError("auto budget must be <= max_per_tx / max_per_day")
+    _seal_auto(slot, request.coin, request.auto_max_per_tx, request.auto_max_per_day, secret)
+    save_config(cfg)
+    blob = _read_auto_requests(cfg)
+    blob.pop(request_id, None)
+    atomic_json(_auto_requests_path(cfg), blob)
     return request

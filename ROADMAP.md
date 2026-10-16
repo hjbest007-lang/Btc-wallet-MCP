@@ -6,16 +6,16 @@ An AI agent should be able to earn and pay for services on the owner's behalf, a
 
 The agent spends from a **hot wallet**: a separate key, a low per-payment limit, and a low daily limit. The most it can lose is the balance the owner chose to put there. Top-ups come from a **cold wallet** that lives only on the owner's machine. The server the agent talks to stores at most a watch-only xpub or address for that cold wallet, and it has no way to make the cold wallet sign.
 
-Anything above the current limit, and any change that raises a limit, needs a human yes. That yes is an approval code (or a terminal confirmation for a limit change) produced where the agent cannot read the approval secret. The owner runs the server as a different OS user from the agent.
+Anything above the current limit, and any change that raises a limit or the autonomous budget, needs a human yes. That yes is an approval code (or a terminal confirmation for a limit or budget change) produced where the agent cannot read the approval secret. The owner can grant a small per-coin budget in base units (`auto_max_per_tx`, `auto_max_per_day`, default 0). Payments inside it are sent without a per-payment code. There is no price oracle. The owner runs the server as a different OS user from the agent.
 
 Today the server can prepare and, after that yes, send a hot-wallet payment on Bitcoin, Ethereum, Avalanche C-chain, XRP, Litecoin, and on USDC/USDT (ERC-20 on Ethereum and Avalanche). Solana is experimental. XRP destination tags and Litecoin BIP84 are in the offline suite. Large cold payments can be signed on the owner's Ledger or Trezor; the agent cannot start that. The server is meant to run as its own OS user, with the approval secret outside the agent's reach. Prepare, approve, and send attempts are written to `audit.log`, and an optional webhook can fire when a human still has to approve. Nothing in the test suite broadcasts a transaction, including on testnets. Opt-in integration tests may read a public testnet and still do not broadcast.
 
 ## What "done" looks like for a coin
 
-- A chain adapter with balance, receive address, and prepare → human approve → send.
-- The adapter cannot broadcast during prepare, and it cannot sign the cold wallet.
+- A chain adapter with balance, receive address, and prepare → human approve → send. A payment inside an owner-granted autonomous budget may be broadcast by the gate during prepare; the adapter still must not broadcast on its own.
+- The adapter cannot broadcast during prepare, and it cannot sign the cold wallet. Cold wallets never auto-spend.
 - Default network is a test network. Mainnet needs that coin's `I_UNDERSTAND_REAL_MONEY` flag.
-- Offline tests with a mocked broadcaster: a send without a valid approval code is refused, and so is a send over the per-tx or daily limit.
+- Offline tests with a mocked broadcaster: a send without a valid approval code is refused when it is outside the autonomous budget, and so is a send over the per-tx or daily limit. A payment inside the budget is sent from prepare and still cannot exceed that budget.
 - The coin is listed in the README table as tested or experimental.
 
 ## Already in the tree
@@ -29,6 +29,7 @@ Not open for a first issue. Do not reimplement these:
 - USDC and USDT on Ethereum and Avalanche, and the experimental Solana adapter.
 - Audit log and the optional approval webhook.
 - The threat model in `SECURITY.md` and the disclaimer in `DISCLAIMER.md`.
+- An owner-granted autonomous budget (`request-auto` / `approve-auto`), sealed with `auto_mac`, default off. See [docs/auto-budget.md](docs/auto-budget.md).
 
 ## Good first issues
 
