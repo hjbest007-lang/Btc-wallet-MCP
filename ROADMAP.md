@@ -32,4 +32,4 @@ These are sized for a first contribution. Read `CONTRIBUTING.md` before opening 
 
 ## Not in scope yet
 
-Lightning, multisig, hardware-wallet signing inside this process, coin control, RBF/CPFP tools, and any path that lets the agent raise its own limits or sign a cold key.
+Lightning, multisig, coin control, RBF/CPFP tools, and any path that lets the agent raise its own limits or sign a cold key. Owner-side Ledger/Trezor signing is a separate TTY command and is not available to the agent.

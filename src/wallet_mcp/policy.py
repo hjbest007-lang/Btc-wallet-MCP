@@ -78,6 +78,18 @@ def approval_code(
     return _hmac(secret, msg.encode())[:12]
 
 
+def hardware_approval_code(
+    secret: str, coin: str, network: str, address: str, amount: int, fee: int, payload_hash: str,
+) -> str:
+    """Code for one cold hardware signature. It is not a hot-wallet send code.
+
+    The domain prefix ``hw`` and the role ``cold`` keep it from matching
+    ``approval_code``. The payload hash binds the PSBT or EIP-712 document.
+    """
+    msg = f"hw|{coin}|{network}|cold|{address}|{amount}|{fee}|{payload_hash}".encode()
+    return _hmac(secret, msg)[:12]
+
+
 def limit_approval_code(secret: str, request_id: str, coin: str, max_per_tx: int, max_per_day: int) -> str:
     msg = f"limit|{request_id}|{coin}|{max_per_tx}|{max_per_day}".encode()
     return _hmac(secret, msg)[:12]
