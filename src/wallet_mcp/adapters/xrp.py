@@ -1,7 +1,9 @@
-"""XRP Ledger adapter (xrpl-py). Experimental: mocked unit tests only.
+"""XRP Ledger adapter (xrpl-py).
 
-Destination tags are not supported. Submit happens only through the broadcaster
-the payment gate passes into ``execute``. Signing itself is local.
+Submit happens only through the broadcaster the payment gate passes into
+``execute``. Signing itself is local. A destination tag, when present, is part
+of the unsigned payload and of the approval HMAC. Known exchange deposit
+addresses require one. Nothing in the unit tests submits a transaction.
 """
 from __future__ import annotations
 
@@ -14,6 +16,18 @@ from xrpl.transaction import sign
 from xrpl.wallet import Wallet
 
 from .base import AdapterError, ChainAdapter, PreparedTransfer
+
+# lsfRequireDestTag. Accounts with this flag only accept payments that carry a tag.
+REQUIRE_DEST_TAG = 0x00020000
+TAG_MAX = 2**32 - 1
+
+# Published shared deposit addresses. A missing tag drops the payment into an
+# uncredited exchange account. Sources: Kraken support article 360000184443,
+# Bitstamp ripple.txt (hotwallets, "XRP deposits only").
+KNOWN_EXCHANGE_ADDRESSES = {
+    "rLHzPsX6oXkzU2qL12kHCH8G8cnZv1rBJh": "Kraken",
+    "rDsbeomae4FXwgQTJp9Rs64Qg9vDiTCdBv": "Bitstamp",
+}
 
 DEFAULT_RPC = {
     "testnet": "https://s.altnet.rippletest.net:51234",
@@ -35,6 +49,52 @@ def _require_https(url: str, *, mainnet: bool) -> str:
     if url.startswith("http://") and not url.startswith(("http://127.0.0.1", "http://localhost")):
         raise AdapterError("RPC URL must use https")
     return url.rstrip("/")
+
+
+def exchange_addresses(env=None) -> dict[str, str]:
+    """Built-in exchange addresses plus any the operator appended.
+
+    ``WALLET_MCP_XRP_TAG_REQUIRED`` is a comma-separated list of classic
+    addresses. It can only add addresses that require a tag.
+    """
+    found = dict(KNOWN_EXCHANGE_ADDRESSES)
+    extra = "" if env is None else (env.get("WALLET_MCP_XRP_TAG_REQUIRED") or "")
+    for part in extra.split(","):
+        address = part.strip()
+        if not address:
+            continue
+        if not is_valid_classic_address(address):
+            raise AdapterError("invalid address in WALLET_MCP_XRP_TAG_REQUIRED")
+        found.setdefault(address, "configured exchange")
+    return found
+
+
+def parse_destination_tag(value) -> int | None:
+    if value is None or value == "":
+        return None
+    if isinstance(value, bool) or not isinstance(value, int):
+        raise AdapterError("destination tag must be an integer from 0 to 4294967295")
+    if value < 0 or value > TAG_MAX:
+        raise AdapterError("destination tag must be an integer from 0 to 4294967295")
+    return value
+
+
+def tag_extra(tag: int | None) -> str:
+    return "" if tag is None else f"tag:{tag}"
+
+
+def _expected_tag(extra: str) -> int | None:
+    if not extra:
+        return None
+    if not extra.startswith("tag:"):
+        raise AdapterError("transaction does not match approved payment")
+    try:
+        tag = int(extra.split(":", 1)[1])
+    except ValueError:
+        raise AdapterError("transaction does not match approved payment") from None
+    if isinstance(tag, bool) or tag < 0 or tag > TAG_MAX:
+        raise AdapterError("transaction does not match approved payment")
+    return tag
 
 
 def default_rpc(network: str, env, *, mainnet: bool) -> str:
@@ -75,6 +135,13 @@ class UrlXrpRead:
         open_fee = drops.get("open_ledger_fee") or drops.get("minimum_fee") or MIN_FEE
         return max(MIN_FEE, int(open_fee))
 
+    def requires_destination_tag(self, address: str) -> bool:
+        result = rpc_call(self.url, "account_info", {"account": address, "ledger_index": "validated"})
+        if result.get("error"):
+            return False
+        flags = int((result.get("account_data") or {}).get("Flags") or 0)
+        return bool(flags & REQUIRE_DEST_TAG)
+
 
 def submit_blob(url: str, blob: str) -> None:
     result = rpc_call(url, "submit", {"tx_blob": blob})
@@ -86,15 +153,17 @@ def submit_blob(url: str, blob: str) -> None:
 class XrpAdapter(ChainAdapter):
     coin_id = "xrp"
     unit = "drop"
-    experimental = True
+    experimental = False
     supports_transactions = False
 
-    def __init__(self, *, network: str, role: str, address: str, rpc, max_fee_rate: int, seed: str | None = None):
+    def __init__(self, *, network: str, role: str, address: str, rpc, max_fee_rate: int,
+                 seed: str | None = None, tag_required: dict | None = None):
         self.network = network
         self.role = role
         self.address = _classic(address)
         self.rpc = rpc
         self.max_fee_rate = max_fee_rate
+        self.tag_required = dict(KNOWN_EXCHANGE_ADDRESSES if tag_required is None else tag_required)
         self._wallet = None
         if role == "hot":
             if not seed:
@@ -111,10 +180,24 @@ class XrpAdapter(ChainAdapter):
     def receive_address(self) -> str:
         return self.address
 
-    def prepare(self, address: str, amount: int, memo: str = "") -> PreparedTransfer:
+    def _tag_required_reason(self, destination: str) -> str | None:
+        label = self.tag_required.get(destination)
+        flagged = False
+        checker = getattr(self.rpc, "requires_destination_tag", None)
+        if checker is not None and checker(destination):
+            flagged = True
+        if label is None and not flagged:
+            return None
+        return label or "an account with RequireDestTag set"
+
+    def prepare(self, address: str, amount: int, memo: str = "", destination_tag: int | None = None) -> PreparedTransfer:
         destination = _classic(address)
         if destination == self.address:
             raise AdapterError("refusing to pay to own address")
+        tag = parse_destination_tag(destination_tag)
+        reason = self._tag_required_reason(destination)
+        if reason is not None and tag is None:
+            raise AdapterError(f"destination tag is required for {reason}")
         _balance, sequence = self.rpc.account(self.address)
         if sequence is None:
             raise AdapterError("account is not funded")
@@ -130,8 +213,11 @@ class XrpAdapter(ChainAdapter):
             "fee": str(fee),
             "sequence": sequence,
         }
+        if tag is not None:
+            payload["destination_tag"] = tag
         return PreparedTransfer(
-            destination, amount, fee, json.dumps(payload, separators=(",", ":"), sort_keys=True), fee_rate=fee
+            destination, amount, fee, json.dumps(payload, separators=(",", ":"), sort_keys=True),
+            fee_rate=fee, extra=tag_extra(tag),
         )
 
     def sign(self, prepared: PreparedTransfer, broadcaster) -> str:
@@ -141,8 +227,16 @@ class XrpAdapter(ChainAdapter):
             tx = json.loads(prepared.payload)
         except json.JSONDecodeError:
             raise AdapterError("transaction does not match approved payment") from None
+        expected_tag = _expected_tag(prepared.extra)
         allowed = {"account", "amount", "destination", "fee", "sequence"}
+        if expected_tag is not None:
+            allowed.add("destination_tag")
         if set(tx) != allowed:
+            raise AdapterError("transaction does not match approved payment")
+        payload_tag = tx.get("destination_tag")
+        if expected_tag is None and payload_tag is not None:
+            raise AdapterError("transaction does not match approved payment")
+        if expected_tag is not None and int(payload_tag) != expected_tag:
             raise AdapterError("transaction does not match approved payment")
         if (
             tx["account"] != self.address
@@ -157,12 +251,17 @@ class XrpAdapter(ChainAdapter):
             amount=str(int(tx["amount"])),
             fee=str(int(tx["fee"])),
             sequence=int(tx["sequence"]),
+            destination_tag=expected_tag,
         )
         signed = sign(payment, self._wallet)
+        signed_tag = signed.destination_tag
+        if expected_tag is None:
+            signed_tag = None if signed_tag in (None, 0) else signed_tag
         if (
             signed.destination != prepared.address
             or int(signed.amount) != prepared.amount
             or int(signed.fee) != prepared.fee
+            or signed_tag != expected_tag
         ):
             raise AdapterError("transaction does not match approved payment")
         broadcaster(signed.blob())

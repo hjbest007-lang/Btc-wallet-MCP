@@ -128,7 +128,9 @@ class BitcoinAdapter(ChainAdapter):
         self.wallet.sync()
         return self.wallet.transactions(max(1, min(int(limit), 100)))
 
-    def prepare(self, address: str, amount: int, memo: str = "") -> PreparedTransfer:
+    def prepare(self, address: str, amount: int, memo: str = "", destination_tag: int | None = None) -> PreparedTransfer:
+        if destination_tag is not None:
+            raise AdapterError("destination tag is not used on this coin")
         try:
             self.wallet.sync()
             rate = self.wallet.fee_rate()

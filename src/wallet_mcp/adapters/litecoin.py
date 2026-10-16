@@ -1,9 +1,10 @@
-"""Experimental Litecoin adapter (embit BIP84).
+"""Litecoin adapter (embit BIP84).
 
 embit has no built-in Litecoin network, so address encoding uses the Litecoin
 bech32 HRP (``tltc`` / ``ltc``) while BIP32 derivation uses embit's reviewed
-secp256k1 path. Coin type is 2 on mainnet and 1 on testnet (SLIP-44). There is
-no live broadcast test; the catalog marks this adapter experimental.
+secp256k1 path. Coin type is 2 on mainnet and 1 on testnet (SLIP-44).
+Offline tests cover derivation and a mocked send. A public Esplora read is
+opt-in and does not broadcast.
 """
 from __future__ import annotations
 
@@ -117,7 +118,7 @@ def default_esplora(network: str, env, *, mainnet: bool) -> str:
 class LitecoinAdapter(ChainAdapter):
     coin_id = "ltc"
     unit = "litoshi"
-    experimental = True
+    experimental = False
     supports_transactions = False
 
     def __init__(self, *, network: str, role: str, chain, max_fee_rate: int, index_store,
@@ -193,7 +194,9 @@ class LitecoinAdapter(ChainAdapter):
         for index in range(change):
             yield 1, index, self._address_at(1, index)
 
-    def prepare(self, address: str, amount: int, memo: str = "") -> PreparedTransfer:
+    def prepare(self, address: str, amount: int, memo: str = "", destination_tag: int | None = None) -> PreparedTransfer:
+        if destination_tag is not None:
+            raise AdapterError("destination tag is not used on this coin")
         destination = address.strip()
         if not destination.startswith(self._hrp + "1"):
             raise AdapterError("invalid address for this network")

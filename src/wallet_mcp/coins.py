@@ -111,7 +111,7 @@ COINS: dict[str, CoinSpec] = {
         name="XRP",
         symbol="XRP",
         unit="drop",
-        status="experimental",
+        status="tested",
         default_network="testnet",
         networks=_nets(
             NetworkSpec("testnet", False),
@@ -128,7 +128,7 @@ COINS: dict[str, CoinSpec] = {
         name="Litecoin",
         symbol="LTC",
         unit="litoshi",
-        status="experimental",
+        status="tested",
         default_network="testnet",
         networks=_nets(
             NetworkSpec("testnet", False),

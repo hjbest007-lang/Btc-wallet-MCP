@@ -57,20 +57,23 @@ class PaymentGate:
             raise PolicyError(f"{coin} is not enabled")
         return self.policies[coin]
 
-    def prepare_payment(self, coin: str, address: str, amount: int, memo: str = "") -> dict:
+    def prepare_payment(self, coin: str, address: str, amount: int, memo: str = "",
+                        destination_tag: int | None = None) -> dict:
         try:
             adapter = self._hot(coin, spend=False)
             policy = self._policy(coin)
             address = address.strip()
             memo = (memo or "")[:MAX_MEMO]
             policy.check_request(address, amount)
-            prepared = adapter.prepare(address, amount, memo)
+            prepared = adapter.prepare(address, amount, memo, destination_tag=destination_tag)
             if not isinstance(prepared, PreparedTransfer):
                 raise AdapterError("adapter prepare did not return a transfer")
             if prepared.address != address or prepared.amount != amount:
                 raise AdapterError("adapter prepare did not match the requested payment")
             policy.check_total(prepared.amount, prepared.fee)
-            pending = policy.add_pending(address, amount, prepared.fee, memo, prepared.payload)
+            pending = policy.add_pending(
+                address, amount, prepared.fee, memo, prepared.payload, extra=prepared.extra
+            )
         except (PolicyError, AdapterError) as exc:
             return {"ok": False, "error": str(exc)}
         except Exception as exc:
@@ -99,6 +102,10 @@ class PaymentGate:
         }
         if prepared.fee_rate is not None:
             body["fee_rate"] = prepared.fee_rate
+        if prepared.extra:
+            body["approval_extra"] = prepared.extra
+            if prepared.extra.startswith("tag:"):
+                body["destination_tag"] = int(prepared.extra.split(":", 1)[1])
         if coin == "btc":
             body["unsigned_psbt"] = prepared.payload
             body["amount_sats"] = amount
@@ -117,7 +124,9 @@ class PaymentGate:
             policy.check_total(pending.amount, pending.fee)
             # Single use, even if broadcast fails afterwards.
             policy.discard(pending.confirm_id)
-            prepared = PreparedTransfer(pending.address, pending.amount, pending.fee, pending.payload)
+            prepared = PreparedTransfer(
+                pending.address, pending.amount, pending.fee, pending.payload, extra=pending.extra
+            )
             authorization = _issue(pending)
             broadcaster = self.broadcasters[coin]
             fired = {"n": 0}

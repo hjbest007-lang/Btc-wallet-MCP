@@ -22,7 +22,9 @@ class Fake(ChainAdapter):
         self.can_sign = role == "hot"
         self.signed = 0
 
-    def prepare(self, address, amount, memo=""):
+    def prepare(self, address, amount, memo="", destination_tag=None):
+        if destination_tag is not None:
+            raise AdapterError("destination tag is not used on this coin")
         if address == "bad":
             raise AdapterError("invalid address for this network")
         return PreparedTransfer(address, amount, 150, "UNSIGNED", fee_rate=2)

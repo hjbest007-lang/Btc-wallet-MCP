@@ -24,7 +24,13 @@ from .adapters.bitcoin import (
 )
 from .adapters.evm import EvmAdapter, UrlEvmRead, account_from_mnemonic, broadcast_raw, checksum, default_rpc
 from .adapters.litecoin import EsploraLtc, FileIndex, LitecoinAdapter, default_esplora
-from .adapters.xrp import UrlXrpRead, XrpAdapter, default_rpc as xrp_rpc, submit_blob
+from .adapters.xrp import (
+    UrlXrpRead,
+    XrpAdapter,
+    default_rpc as xrp_rpc,
+    exchange_addresses,
+    submit_blob,
+)
 from .config import AppConfig, ConfigError
 from .gate import PaymentGate
 from .policy import Policy
@@ -154,7 +160,7 @@ def build_xrp(cfg: AppConfig) -> Bundle:
     _guard_agent_has_no_cold_seed(cfg, "xrp")
     seed_path = cfg.hot_dir("xrp") / "seed.enc"
     if not seed_path.exists():
-        hot = UnconfiguredHot("xrp", coin.network, "drop", True)
+        hot = UnconfiguredHot("xrp", coin.network, "drop", coin.spec.experimental)
         broadcaster = _refuse_broadcast
     else:
         from xrpl.wallet import Wallet
@@ -165,6 +171,7 @@ def build_xrp(cfg: AppConfig) -> Bundle:
         hot = XrpAdapter(
             network=coin.network, role="hot", address=wallet.classic_address,
             rpc=UrlXrpRead(url), max_fee_rate=coin.max_fee_rate, seed=seed,
+            tag_required=exchange_addresses(cfg.env),
         )
 
         def broadcaster(blob, _url=url):
@@ -178,7 +185,7 @@ def build_xrp(cfg: AppConfig) -> Bundle:
 def _xrp_cold(cfg: AppConfig, coin) -> ChainAdapter:
     path = cfg.cold_dir("xrp") / "watch.json"
     if not path.exists():
-        return UnconfiguredCold("xrp", coin.network, "drop", True)
+        return UnconfiguredCold("xrp", coin.network, "drop", coin.spec.experimental)
     document = load_watch_file(path)
     if document.get("kind") != "address":
         raise ConfigError("xrp watch file must have kind address")
@@ -186,6 +193,7 @@ def _xrp_cold(cfg: AppConfig, coin) -> ChainAdapter:
     return XrpAdapter(
         network=coin.network, role="cold", address=document["address"],
         rpc=UrlXrpRead(url), max_fee_rate=coin.max_fee_rate, seed=None,
+        tag_required=exchange_addresses(cfg.env),
     )
 
 
@@ -194,7 +202,7 @@ def build_ltc(cfg: AppConfig) -> Bundle:
     _guard_agent_has_no_cold_seed(cfg, "ltc")
     seed_path = cfg.hot_dir("ltc") / "seed.enc"
     if not seed_path.exists():
-        hot = UnconfiguredHot("ltc", coin.network, "litoshi", True)
+        hot = UnconfiguredHot("ltc", coin.network, "litoshi", coin.spec.experimental)
         broadcaster = _refuse_broadcast
     else:
         mnemonic = _read_hot_secret(cfg, "ltc")
@@ -220,7 +228,7 @@ def build_ltc(cfg: AppConfig) -> Bundle:
 def _ltc_cold(cfg: AppConfig, coin) -> ChainAdapter:
     path = cfg.cold_dir("ltc") / "watch.json"
     if not path.exists():
-        return UnconfiguredCold("ltc", coin.network, "litoshi", True)
+        return UnconfiguredCold("ltc", coin.network, "litoshi", coin.spec.experimental)
     document = load_watch_file(path)
     if document.get("kind") != "bip84-xpub":
         raise ConfigError("ltc watch file must have kind bip84-xpub")

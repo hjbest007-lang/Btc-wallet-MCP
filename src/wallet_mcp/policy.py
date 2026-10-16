@@ -37,6 +37,7 @@ class Pending:
     memo: str
     payload: str
     created: float
+    extra: str = ""
 
 
 @dataclass
@@ -63,10 +64,18 @@ def approval_code(
     address: str,
     amount: int,
     fee: int,
+    extra: str = "",
 ) -> str:
-    """12-hex code a human computes to authorise exactly one hot-wallet payment."""
-    msg = f"{coin}|{network}|{role}|{confirm_id}|{address}|{amount}|{fee}".encode()
-    return _hmac(secret, msg)[:12]
+    """12-hex code a human computes to authorise exactly one hot-wallet payment.
+
+    ``extra`` binds an on-chain field such as an XRP destination tag. An empty
+    extra keeps the historical message, so a code for a payment with no tag
+    still matches. A code that omits the tag does not match a tagged payment.
+    """
+    msg = f"{coin}|{network}|{role}|{confirm_id}|{address}|{amount}|{fee}"
+    if extra:
+        msg = f"{msg}|{extra}"
+    return _hmac(secret, msg.encode())[:12]
 
 
 def limit_approval_code(secret: str, request_id: str, coin: str, max_per_tx: int, max_per_day: int) -> str:
@@ -142,7 +151,7 @@ class Policy:
                 f"daily limit: {spent} spent in last 24h, limit {max_day} {self.unit}"
             )
 
-    def add_pending(self, address, amount, fee, memo, payload) -> Pending:
+    def add_pending(self, address, amount, fee, memo, payload, extra: str = "") -> Pending:
         state = self._state()
         self._expire(state)
         pending = Pending(
@@ -156,6 +165,7 @@ class Policy:
             memo,
             payload,
             self.now(),
+            extra or "",
         )
         state["pending"][pending.confirm_id] = asdict(pending)
         atomic_json(self.state_path, state)
@@ -186,7 +196,7 @@ class Policy:
             )
         expected = approval_code(
             secret, pending.coin, pending.network, pending.role, pending.confirm_id,
-            pending.address, pending.amount, pending.fee,
+            pending.address, pending.amount, pending.fee, extra=pending.extra,
         )
         if not _matches(expected, code):
             state["failed"] += 1

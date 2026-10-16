@@ -25,6 +25,8 @@ class PreparedTransfer:
     fee: int
     payload: str
     fee_rate: int | None = None
+    # Bound into the approval HMAC when set (for example ``tag:123``).
+    extra: str = ""
 
 
 class ChainAdapter:
@@ -42,7 +44,7 @@ class ChainAdapter:
     def receive_address(self) -> str:
         raise AdapterError("receive address is not available")
 
-    def prepare(self, address: str, amount: int, memo: str = "") -> PreparedTransfer:
+    def prepare(self, address: str, amount: int, memo: str = "", destination_tag: int | None = None) -> PreparedTransfer:
         raise AdapterError("this wallet cannot prepare a payment")
 
     def list_transactions(self, limit: int = 25) -> list[dict]:
@@ -93,7 +95,7 @@ class UnconfiguredHot(ChainAdapter):
     def receive_address(self) -> str:
         self._missing()
 
-    def prepare(self, address: str, amount: int, memo: str = "") -> PreparedTransfer:
+    def prepare(self, address: str, amount: int, memo: str = "", destination_tag: int | None = None) -> PreparedTransfer:
         self._missing()
 
     def sign(self, prepared: PreparedTransfer, broadcaster) -> str:
@@ -122,7 +124,7 @@ class UnconfiguredCold(ChainAdapter):
     def receive_address(self) -> str:
         self._missing()
 
-    def prepare(self, address: str, amount: int, memo: str = "") -> PreparedTransfer:
+    def prepare(self, address: str, amount: int, memo: str = "", destination_tag: int | None = None) -> PreparedTransfer:
         raise AdapterError("cold watch-only wallet cannot sign")
 
     def sign(self, prepared: PreparedTransfer, broadcaster) -> str:
