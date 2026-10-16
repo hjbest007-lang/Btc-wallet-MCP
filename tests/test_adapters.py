@@ -191,6 +191,83 @@ def test_xrp_mocked_send_and_limit(tmp_path):
     assert len(spy.calls) == 1
 
 
+KRAKEN = "rLHzPsX6oXkzU2qL12kHCH8G8cnZv1rBJh"
+
+
+def test_xrp_exchange_tag_is_required_and_bound_into_the_code(tmp_path):
+    wallet = Wallet.from_seed(XRP_SEED)
+    adapter = XrpAdapter(
+        network="testnet", role="hot", address=wallet.classic_address, rpc=XrpRpc(),
+        max_fee_rate=100, seed=wallet.seed,
+    )
+    spy = Spy()
+    policy = Policy("xrp", "testnet", "drop", tmp_path, lambda: (2_000_000, 2_000_000, frozenset()))
+    gate = PaymentGate({"xrp": adapter}, {"xrp": policy}, {"xrp": spy}, lambda: SECRET)
+    missing = gate.prepare_payment("xrp", KRAKEN, 1000)
+    assert not missing["ok"] and "destination tag is required" in missing["error"] and "Kraken" in missing["error"]
+    assert spy.calls == []
+    rejected = gate.prepare_payment("xrp", KRAKEN, 1000, destination_tag=-1)
+    assert not rejected["ok"] and spy.calls == []
+    prepared = gate.prepare_payment("xrp", KRAKEN, 1000, destination_tag=4242)
+    assert prepared["ok"] and prepared["destination_tag"] == 4242 and spy.calls == []
+    stale = approval_code(
+        SECRET, "xrp", "testnet", "hot", prepared["confirm_id"], prepared["address"], prepared["amount"], prepared["fee"]
+    )
+    assert not gate.send_payment("xrp", prepared["confirm_id"], stale)["ok"]
+    assert spy.calls == []
+    other = approval_code(
+        SECRET, "xrp", "testnet", "hot", prepared["confirm_id"], prepared["address"],
+        prepared["amount"], prepared["fee"], extra="tag:1",
+    )
+    assert not gate.send_payment("xrp", prepared["confirm_id"], other)["ok"]
+    assert spy.calls == []
+    code = approval_code(
+        SECRET, "xrp", "testnet", "hot", prepared["confirm_id"], prepared["address"],
+        prepared["amount"], prepared["fee"], extra=prepared["approval_extra"],
+    )
+    sent = gate.send_payment("xrp", prepared["confirm_id"], code)
+    assert sent["ok"] and len(spy.calls) == 1
+    from xrpl.core.binarycodec import decode
+    decoded = decode(spy.calls[0])
+    assert int(decoded["DestinationTag"]) == 4242
+    assert decoded["Destination"] == KRAKEN
+
+
+def test_xrp_signed_tag_must_match_the_approved_tag():
+    wallet = Wallet.from_seed(XRP_SEED)
+    adapter = XrpAdapter(
+        network="testnet", role="hot", address=wallet.classic_address, rpc=XrpRpc(),
+        max_fee_rate=100, seed=wallet.seed,
+    )
+    prepared = adapter.prepare("rHb9CJAWyB4rj91VRWn96DkukG4bwdtyTh", 1000, destination_tag=7)
+    payload = json.loads(prepared.payload)
+    payload["destination_tag"] = 8
+    tampered = PreparedTransfer(
+        prepared.address, prepared.amount, prepared.fee,
+        json.dumps(payload, separators=(",", ":"), sort_keys=True), extra=prepared.extra,
+    )
+    spy = Spy()
+    with pytest.raises(AdapterError, match="does not match"):
+        adapter.sign(tampered, spy)
+    assert spy.calls == []
+
+
+def test_xrp_require_dest_flag_requires_a_tag():
+    class Flagged(XrpRpc):
+        def requires_destination_tag(self, address):
+            return True
+
+    wallet = Wallet.from_seed(XRP_SEED)
+    adapter = XrpAdapter(
+        network="testnet", role="hot", address=wallet.classic_address, rpc=Flagged(),
+        max_fee_rate=100, seed=wallet.seed,
+    )
+    with pytest.raises(AdapterError, match="destination tag is required"):
+        adapter.prepare("rHb9CJAWyB4rj91VRWn96DkukG4bwdtyTh", 10)
+    prepared = adapter.prepare("rHb9CJAWyB4rj91VRWn96DkukG4bwdtyTh", 10, destination_tag=0)
+    assert json.loads(prepared.payload)["destination_tag"] == 0
+
+
 def prepared_from(body):
     return PreparedTransfer(body["address"], body["amount"], body["fee"], body["unsigned_payload"])
 
@@ -216,6 +293,20 @@ def test_ltc_vector_watch_only_and_mocked_send(tmp_path):
         index_store=MemoryIndex(), mnemonic=MNEMONIC,
     )
     assert hot.receive_address() == "tltc1q6rz28mcfaxtmd6v789l9rrlrusdprr9pesrjxk"
+    main = LitecoinAdapter(
+        network="mainnet", role="hot", chain=LtcChain("unused"), max_fee_rate=50,
+        index_store=MemoryIndex(), mnemonic=MNEMONIC,
+    )
+    main_xpub = export_xpub(MNEMONIC, "mainnet")
+    assert main_xpub == (
+        "xpub6CjGURuDpczf6uNrCCwfhVizn5J3hsWcvZ2m6GAdmAjZnoWJPrx6TFPjGSftc2o5fvox6ubQjSXmjjaHZjwYMH7SGFpHHb9Jg24zBf66mbE"
+    )
+    assert main.receive_address() == "ltc1qjmxnz78nmc8nq77wuxh25n2es7rzm5c2rkk4wh"
+    main_cold = LitecoinAdapter(
+        network="mainnet", role="cold", chain=LtcChain("unused"), max_fee_rate=50,
+        index_store=MemoryIndex(), xpub=main_xpub,
+    )
+    assert main_cold.receive_address() == "ltc1qjmxnz78nmc8nq77wuxh25n2es7rzm5c2rkk4wh"
     # A fresh watch-only index derives the same first address as the hot key.
     cold_again = LitecoinAdapter(
         network="testnet", role="cold", chain=LtcChain("unused"), max_fee_rate=50,

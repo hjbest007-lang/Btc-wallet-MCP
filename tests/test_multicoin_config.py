@@ -23,8 +23,8 @@ def test_defaults_are_test_networks_and_disabled(tmp_path):
     assert cfg.coins["btc"].network == "signet" and not cfg.coins["btc"].enabled
     assert cfg.coins["eth"].network == "sepolia"
     assert cfg.coins["avax"].network == "fuji"
-    assert cfg.coins["xrp"].network == "testnet" and cfg.coins["xrp"].spec.experimental
-    assert cfg.coins["ltc"].network == "testnet" and cfg.coins["ltc"].spec.experimental
+    assert cfg.coins["xrp"].network == "testnet" and cfg.coins["xrp"].spec.status == "tested"
+    assert cfg.coins["ltc"].network == "testnet" and cfg.coins["ltc"].spec.status == "tested"
     assert cfg.coins["eth"].spec.status == "tested"
     assert cfg.coins["avax"].chain_id == 43113
     assert not cfg.coins["btc"].is_mainnet
@@ -67,7 +67,7 @@ def test_enable_does_not_touch_limits(tmp_path):
     again = load_config(env(tmp_path))
     assert again.enabled_ids() == ["btc", "xrp"]
     assert again.coins["btc"].max_per_tx == 50_000
-    assert again.coins["xrp"].spec.experimental
+    assert again.coins["xrp"].spec.status == "tested"
 
 
 def test_cannot_enable_mainnet_without_flag(tmp_path):

@@ -180,9 +180,13 @@ def cmd_approve(cfg, args) -> None:
     _tty()
     _require_coin(args.coin)
     pending = _policy(cfg, args.coin).get_pending(args.confirm_id)
+    tag_line = ""
+    if pending.extra.startswith("tag:"):
+        tag_line = f"Tag     : {pending.extra.split(':', 1)[1]}\n"
     print(
         f"Coin    : {pending.coin}\nNetwork : {pending.network}\nRole    : {pending.role}\n"
-        f"To      : {pending.address}\nAmount  : {format_amount(pending.coin, pending.amount)}\n"
+        f"To      : {pending.address}\n{tag_line}"
+        f"Amount  : {format_amount(pending.coin, pending.amount)}\n"
         f"Fee     : {format_amount(pending.coin, pending.fee)}\nMemo    : {pending.memo}"
     )
     if input("Approve exactly this hot-wallet payment? type 'yes': ").strip() != "yes":
@@ -190,7 +194,7 @@ def cmd_approve(cfg, args) -> None:
     secret = cfg.env.get("WALLET_MCP_APPROVAL_SECRET") or getpass.getpass("Approval secret: ")
     print("Approval code:", approval_code(
         secret, pending.coin, pending.network, pending.role, pending.confirm_id,
-        pending.address, pending.amount, pending.fee,
+        pending.address, pending.amount, pending.fee, extra=pending.extra,
     ))
 
 

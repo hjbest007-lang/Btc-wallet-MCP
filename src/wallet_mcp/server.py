@@ -67,13 +67,25 @@ def _register_coin(app: FastMCP, runtime: Runtime, coin_id: str) -> None:
     cold_address.__doc__ = f"Watch-only cold {spec.name} receive address. The server has no cold private key."
     app.tool(name=f"{coin_id}_cold_get_address")(cold_address)
 
-    def prepare_payment(address: str, amount: int, memo: str = "") -> dict:
-        return runtime.gate.prepare_payment(coin_id, address, amount, memo)
+    if coin_id == "xrp":
+        def prepare_payment(address: str, amount: int, memo: str = "", destination_tag: int | None = None) -> dict:
+            return runtime.gate.prepare_payment(
+                coin_id, address, amount, memo, destination_tag=destination_tag
+            )
 
-    prepare_payment.__doc__ = (
-        f"Prepare (do NOT send) a hot {spec.name} payment. Amount is an integer in {unit}. "
-        "Returns a confirm_id. A human must approve it out of band before send works."
-    )
+        prepare_payment.__doc__ = (
+            f"Prepare (do NOT send) a hot {spec.name} payment. Amount is an integer in {unit}. "
+            "destination_tag is optional, and required for known exchange deposit addresses. "
+            "The tag is bound into the approval code. Returns a confirm_id."
+        )
+    else:
+        def prepare_payment(address: str, amount: int, memo: str = "") -> dict:
+            return runtime.gate.prepare_payment(coin_id, address, amount, memo)
+
+        prepare_payment.__doc__ = (
+            f"Prepare (do NOT send) a hot {spec.name} payment. Amount is an integer in {unit}. "
+            "Returns a confirm_id. A human must approve it out of band before send works."
+        )
     app.tool(name=f"{coin_id}_prepare_payment")(prepare_payment)
 
     def send_payment(confirm_id: str, approval_code: str) -> dict:

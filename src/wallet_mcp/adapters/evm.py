@@ -119,7 +119,9 @@ class EvmAdapter(ChainAdapter):
     def receive_address(self) -> str:
         return self.address
 
-    def prepare(self, address: str, amount: int, memo: str = "") -> PreparedTransfer:
+    def prepare(self, address: str, amount: int, memo: str = "", destination_tag: int | None = None) -> PreparedTransfer:
+        if destination_tag is not None:
+            raise AdapterError("destination tag is not used on this coin")
         destination = checksum(address)
         if destination.lower() == self.address.lower():
             raise AdapterError("refusing to pay to own address")

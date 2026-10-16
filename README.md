@@ -45,10 +45,10 @@ Top-ups are ordinary transfers the owner sends from their own cold wallet to the
 | Bitcoin | **tested** | signet | testnet, testnet4, regtest, mainnet (opt-in) | bdkpython (BDK, BIP84) | sat |
 | Ethereum | **tested** | sepolia | mainnet (opt-in) | eth-account | wei |
 | Avalanche C-chain | **tested** | fuji | mainnet (opt-in) | eth-account (chain id 43113 / 43114) | wei |
-| XRP | **experimental** | testnet | devnet, mainnet (opt-in) | xrpl-py | drop |
-| Litecoin | **experimental** | testnet | mainnet (opt-in) | embit (BIP84, LTC bech32) | litoshi |
+| XRP | **tested** | testnet | devnet, mainnet (opt-in) | xrpl-py | drop |
+| Litecoin | **tested** | testnet | mainnet (opt-in) | embit (BIP84, LTC bech32) | litoshi |
 
-**Tested** means the offline suite covers address derivation and a mocked send through the central approval gate. **Experimental** means the same mocked path exists, but the adapter is new or incomplete (XRP has no destination tags; Litecoin address encoding is embit plus the Litecoin HRP, and it is not covered by a public Esplora test).
+**Tested** means the offline suite covers address derivation and a mocked send through the central approval gate. XRP destination tags are part of that: known exchange deposit addresses require a tag, and the tag is bound into the approval code. Litecoin covers BIP84 on testnet and mainnet. **Experimental** means the same mocked path exists, but the adapter is new or incomplete. Opt-in testnet reads (`WALLET_MCP_INTEGRATION=1`) never broadcast.
 
 No test broadcasts a transaction. Not on mainnet, and not on testnet either.
 
@@ -69,8 +69,8 @@ Select coins. Enter a number to toggle, s to save, q to quit.
   1. [x] Bitcoin (BTC) — signet — tested
   2. [ ] Ethereum (ETH) — sepolia — tested
   3. [ ] Avalanche C-chain (AVAX) — fuji — tested
-  4. [ ] XRP (XRP) — testnet — experimental
-  5. [ ] Litecoin (LTC) — testnet — experimental
+  4. [ ] XRP (XRP) — testnet — tested
+  5. [ ] Litecoin (LTC) — testnet — tested
 ```
 
 Zonder menu, bijvoorbeeld alleen Bitcoin en Ethereum:
@@ -112,6 +112,7 @@ For each enabled coin `<coin>` (`btc`, `eth`, `avax`, `xrp`, `ltc`):
 2. You run, in your own terminal: `wallet-mcp approve --coin btc <confirm_id>`.
    It shows coin, address, amount, and fee, asks for `yes`, and prints a 12-hex code.
    The code is HMAC-SHA256 of the approval secret and `coin|network|hot|confirm_id|address|amount|fee`.
+   An XRP destination tag, when present, is appended as `|tag:<n>`. A code without that suffix does not approve a tagged payment. Known exchange deposit addresses (Kraken, Bitstamp, plus `WALLET_MCP_XRP_TAG_REQUIRED`) cannot be prepared without a tag.
 3. You give that code to the agent. `<coin>_send_payment` checks it in constant time, re-checks the limits, then signs.
    The code matches one payment only. Five wrong codes lock that coin until `wallet-mcp unlock --coin <coin>`.
 
@@ -211,7 +212,7 @@ The server process should run as its **own OS user** (or its own machine or cont
 | Accidental mainnet | Disabled until `WALLET_MCP_<COIN>_ALLOW_MAINNET=I_UNDERSTAND_REAL_MONEY` | – |
 | Stolen disk | scrypt (N=2^17) + AES-256-GCM | A weak passphrase |
 
-Out of scope: Lightning, multisig, hardware wallets, RBF/CPFP, coin control. XRP destination tags are not implemented (see the roadmap).
+Out of scope: Lightning, multisig, hardware wallets, RBF/CPFP, coin control.
 
 ## Bitcoin-only server
 
@@ -222,6 +223,7 @@ Out of scope: Lightning, multisig, hardware wallets, RBF/CPFP, coin control. XRP
 ```bash
 pytest -q                                          # offline; no broadcasts
 BTC_WALLET_INTEGRATION=1 pytest -q -m integration  # live signet read of an empty wallet; still no broadcast
+WALLET_MCP_INTEGRATION=1 pytest -q -m integration  # XRP testnet fee + Litecoin testnet fee estimate; still no broadcast
 ```
 
 ## Development

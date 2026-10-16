@@ -28,4 +28,6 @@ build-backend = "setuptools.build_meta"
 where = ["src"]
 
 [tool.pytest.ini_options]
-markers = ["integration: hits a public signet Esplora (opt-in: BTC_WALLET_INTEGRATION=1)"]
+markers = [
+    "integration: public signet/testnet reads only (opt-in: BTC_WALLET_INTEGRATION=1 or WALLET_MCP_INTEGRATION=1). Never broadcasts.",
+]
