@@ -4,11 +4,11 @@ from __future__ import annotations
 import json
 import math
 import os
-import urllib.request
 
 import bdkpython as bdk
 
 from .config import Config
+from .guard import open_chain
 from .keystore import read_seed_file
 
 NETWORKS = {
@@ -41,7 +41,7 @@ class BtcWallet:
     def __init__(self, cfg: Config, passphrase: str, client=None):
         self.cfg = cfg
         self.net = NETWORKS[cfg.network]
-        mnemonic = read_seed_file(cfg.data_dir / "seed.enc", passphrase)
+        mnemonic = read_seed_file(cfg.data_dir / "seed.enc", passphrase, context="btc")
         ext, chg = descriptors_from_mnemonic(mnemonic, cfg.network)
         del mnemonic
         db = cfg.data_dir / "wallet.sqlite"  # BDK stores public descriptors/chain data only
@@ -109,8 +109,8 @@ class BtcWallet:
             return self.client.get_fee_estimates()
         except Exception:
             # mempool.space answers fee-estimates with HTTP 203, which BDK rejects.
-            with urllib.request.urlopen(self.cfg.esplora_url + "/fee-estimates", timeout=15) as r:
-                return {int(k): float(v) for k, v in json.load(r).items()}
+            with open_chain(self.cfg.esplora_url + "/fee-estimates", timeout=15, mainnet=self.cfg.is_mainnet) as response:
+                return {int(k): float(v) for k, v in json.load(response).items()}
 
     def fee_rate(self, target_blocks: int = 6) -> int:
         est = self._fee_estimates()

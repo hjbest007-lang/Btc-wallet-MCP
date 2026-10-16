@@ -4,6 +4,8 @@ from __future__ import annotations
 import json
 import re
 
+from btc_wallet_mcp.guard import contains_wif
+
 from .config import ConfigError
 
 _SECRET_KEYS = {"seed", "mnemonic", "private_key", "privatekey", "secret", "xprv"}
@@ -33,6 +35,8 @@ def _walk(value, key: str = "") -> None:
         if re.fullmatch(r"s[1-9A-HJ-NP-Za-km-z]{15,}", value):
             raise ConfigError("watch-only import contains an XRP seed")
         if re.fullmatch(r"(0x)?[0-9a-fA-F]{64}", value):
+            raise ConfigError("watch-only import contains a private key")
+        if contains_wif(value):
             raise ConfigError("watch-only import contains a private key")
         words = value.split()
         if len(words) in {12, 15, 18, 21, 24} and all(word.isalpha() for word in words):

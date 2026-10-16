@@ -9,13 +9,15 @@ opt-in and does not broadcast.
 from __future__ import annotations
 
 import json
-import urllib.request
 from dataclasses import dataclass
+from urllib.parse import quote
 
 from embit import bip32, bip39, script
 from embit.networks import NETWORKS
 from embit.script import p2wpkh, witness_p2wpkh
 from embit.transaction import SIGHASH, Transaction, TransactionInput, TransactionOutput
+
+from btc_wallet_mcp.guard import GuardError, open_chain, validate_chain_url
 
 from .base import AdapterError, ChainAdapter, PreparedTransfer
 
@@ -75,11 +77,11 @@ class EsploraLtc:
         self.url = url.rstrip("/")
 
     def _get(self, path: str):
-        with urllib.request.urlopen(self.url + path, timeout=20) as response:
+        with open_chain(self.url + path, timeout=20) as response:
             return json.load(response)
 
     def utxos_for(self, address: str, branch: int, index: int) -> list[Utxo]:
-        rows = self._get(f"/address/{address}/utxo")
+        rows = self._get("/address/" + quote(address, safe="") + "/utxo")
         return [
             Utxo(row["txid"], int(row["vout"]), int(row["value"]), branch, index)
             for row in rows
@@ -110,9 +112,10 @@ def default_esplora(network: str, env, *, mainnet: bool) -> str:
         url = env.get("WALLET_MCP_LTC_ESPLORA_URL") or "https://litecoinspace.org/api"
     else:
         url = env.get("WALLET_MCP_LTC_ESPLORA_URL") or "https://litecoinspace.org/testnet/api"
-    if mainnet and not url.startswith("https://"):
-        raise AdapterError("mainnet Esplora URL must use https")
-    return url.rstrip("/")
+    try:
+        return validate_chain_url(url, mainnet=mainnet)
+    except GuardError as exc:
+        raise AdapterError(str(exc)) from None
 
 
 class LitecoinAdapter(ChainAdapter):

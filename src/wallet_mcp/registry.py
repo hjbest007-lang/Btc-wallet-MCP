@@ -6,11 +6,11 @@ is kept by the payment gate; it is not stored on the adapter.
 """
 from __future__ import annotations
 
-import urllib.request
 from dataclasses import dataclass
 from typing import Callable
 
 import bdkpython as bdk
+from btc_wallet_mcp.guard import open_chain
 from btc_wallet_mcp.keystore import read_seed_file
 from btc_wallet_mcp.wallet import BtcWallet
 
@@ -72,7 +72,10 @@ def _read_hot_secret(cfg: AppConfig, coin_id: str) -> str:
     passphrase = cfg.env.get("WALLET_MCP_PASSPHRASE")
     if not passphrase:
         raise ConfigError("WALLET_MCP_PASSPHRASE not set")
-    return read_seed_file(path, passphrase, missing_message=f"no hot {coin_id} wallet; run wallet-mcp init")
+    return read_seed_file(
+        path, passphrase, missing_message=f"no hot {coin_id} wallet; run wallet-mcp init",
+        context=f"{coin_id}:hot",
+    )
 
 
 def build_bitcoin(cfg: AppConfig) -> Bundle:
@@ -224,10 +227,9 @@ def build_ltc(cfg: AppConfig) -> Bundle:
         )
 
         def broadcaster(raw, _url=url):
-            request = urllib.request.Request(
-                _url + "/tx", data=raw.hex().encode(), headers={"Content-Type": "text/plain"}
-            )
-            with urllib.request.urlopen(request, timeout=20) as response:
+            with open_chain(
+                _url + "/tx", data=raw.hex().encode(), headers={"Content-Type": "text/plain"}, timeout=20
+            ) as response:
                 return response.read().decode().strip()
 
     cold = _ltc_cold(cfg, coin)
@@ -463,6 +465,10 @@ def build_runtime(cfg: AppConfig, factories: dict | None = None) -> Runtime:
     policies = {}
     broadcasters = {}
     ttl = {}
+
+    def secret() -> str | None:
+        return cfg.env.get("WALLET_MCP_APPROVAL_SECRET")
+
     for coin_id, coin in cfg.coins.items():
         if not coin.enabled:
             continue
@@ -475,9 +481,9 @@ def build_runtime(cfg: AppConfig, factories: dict | None = None) -> Runtime:
         policies[coin_id] = Policy(
             coin_id, coin.network, coin.spec.unit, cfg.policy_dir(coin_id),
             _limit_provider(cfg, coin_id), ttl=coin.spec.confirm_ttl_seconds,
+            secret_provider=secret,
         )
         ttl[coin_id] = coin.spec.confirm_ttl_seconds
-    secret = lambda: cfg.env.get("WALLET_MCP_APPROVAL_SECRET")  # noqa: E731
     gate = PaymentGate(
         hot, policies, broadcasters, secret, ttl,
         auditor=AuditLog(cfg.data_dir / "audit.log"),

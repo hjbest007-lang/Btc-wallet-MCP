@@ -5,12 +5,13 @@ from __future__ import annotations
 
 import logging
 
+from btc_wallet_mcp.guard import GuardError, assert_safe_memo
+
 from .adapters.base import AdapterError, PreparedTransfer
 from .auth import SpendAuthorization
 from .policy import Policy, PolicyError
 
 log = logging.getLogger("wallet_mcp")
-MAX_MEMO = 140
 
 # Identity seal. SpendAuthorization accepts only this exact object.
 gate_seal = object()
@@ -94,9 +95,8 @@ class PaymentGate:
         try:
             adapter = self._hot(coin, spend=False)
             policy = self._policy(coin)
-            address = address.strip()
-            memo = (memo or "")[:MAX_MEMO]
-            policy.check_request(address, amount)
+            memo = assert_safe_memo(memo or "")
+            address = policy.check_request(address, amount)
             prepared = adapter.prepare(address, amount, memo, destination_tag=destination_tag)
             if not isinstance(prepared, PreparedTransfer):
                 raise AdapterError("adapter prepare did not return a transfer")
@@ -107,7 +107,7 @@ class PaymentGate:
             pending = policy.add_pending(
                 address, amount, prepared.fee, memo, prepared.payload, extra=prepared.extra
             )
-        except (PolicyError, AdapterError) as exc:
+        except (PolicyError, AdapterError, GuardError) as exc:
             self._audit("prepare_fail", coin=coin, address=address, amount=amount, ok=False, error=str(exc))
             return {"ok": False, "error": str(exc)}
         except Exception as exc:
@@ -163,16 +163,19 @@ class PaymentGate:
         try:
             adapter = self._hot(coin, spend=True)
             policy = self._policy(coin)
-            pending = policy.get_pending(confirm_id)
-            if pending.coin != coin:
+            preview = policy.get_pending(confirm_id)
+            if preview.coin != coin:
                 raise PolicyError("confirm_id is for a different coin")
-            policy.verify_approval(pending, approval_code, self._secret())
-            policy.check_total(pending.amount, pending.fee)
-            parent_gas = self._parent_gas(adapter, pending.extra)
-            # Single use, even if broadcast fails afterwards.
-            policy.discard(pending.confirm_id)
+            policy.verify_approval(preview, approval_code, self._secret())
+            parent_gas = self._parent_gas(adapter, preview.extra)
+            pending = policy.authorize_and_reserve(confirm_id, approval_code, self._secret())
+            if parent_gas is not None:
+                parent, gas = parent_gas
+                self.policies[parent].note_external_fee(
+                    "", gas, f"gas for {coin}", confirm_id=pending.confirm_id,
+                )
             prepared = PreparedTransfer(
-                pending.address, pending.amount, pending.fee, pending.payload, extra=pending.extra
+                pending.address, pending.amount, pending.fee, pending.payload, extra=pending.extra,
             )
             authorization = _issue(pending)
             broadcaster = self.broadcasters[coin]
@@ -185,10 +188,13 @@ class PaymentGate:
                 return broadcaster(raw)
 
             txid = adapter.execute(prepared, authorization, once)
-            policy.consume(pending, txid)
-            if parent_gas is not None:
-                parent, gas = parent_gas
-                self.policies[parent].note_external_fee(txid, gas, f"gas for {coin}")
+            try:
+                policy.attach_txid(pending, txid)
+                if parent_gas is not None:
+                    parent, _gas = parent_gas
+                    self.policies[parent].attach_txid(pending, txid)
+            except PolicyError:
+                log.warning("ledger update failed after broadcast")
         except (PolicyError, AdapterError) as exc:
             message = str(exc)
             event = "approve_fail" if "approval" in message else "send_fail"

@@ -12,6 +12,8 @@ import bdkpython as bdk
 from btc_wallet_mcp.config import DEFAULT_ESPLORA, Config as BtcConfig
 from btc_wallet_mcp.wallet import NETWORKS, BtcWallet, WalletError
 
+from btc_wallet_mcp.guard import GuardError, contains_wif, validate_chain_url
+
 from .base import AdapterError, ChainAdapter, PreparedTransfer
 
 
@@ -20,6 +22,16 @@ def _reject_private(descriptor: str) -> None:
     for marker in ("xprv", "tprv", "yprv", "zprv", "vprv"):
         if marker in lowered:
             raise AdapterError("cold descriptor contains a private key")
+    if contains_wif(descriptor):
+        raise AdapterError("cold descriptor contains a private key")
+
+
+def assert_public_descriptor(descriptor: str, network: str) -> None:
+    """Reject a descriptor that still carries a signing key, including WIF."""
+    _reject_private(descriptor)
+    parsed = bdk.Descriptor(descriptor, NETWORKS[network])
+    if parsed.to_string_with_secret() != str(parsed):
+        raise AdapterError("cold descriptor contains a private key")
 
 
 class ReadOnlyClient:
@@ -53,8 +65,8 @@ def public_descriptors(mnemonic: str, network: str) -> dict:
     external = str(bdk.Descriptor.new_bip84(secret, bdk.KeychainKind.EXTERNAL, net))
     internal = str(bdk.Descriptor.new_bip84(secret, bdk.KeychainKind.INTERNAL, net))
     del secret
-    _reject_private(external)
-    _reject_private(internal)
+    assert_public_descriptor(external, network)
+    assert_public_descriptor(internal, network)
     return {"kind": "bdk-descriptor", "external": external, "internal": internal}
 
 
@@ -74,15 +86,16 @@ def btc_config(coin, directory, esplora_url: str) -> BtcConfig:
 def esplora_url(coin, env) -> str:
     override = env.get("WALLET_MCP_BTC_ESPLORA_URL") or env.get("BTC_WALLET_ESPLORA_URL")
     url = (override or DEFAULT_ESPLORA[coin.network]).rstrip("/")
-    if coin.is_mainnet and not url.startswith("https://"):
-        raise AdapterError("mainnet Esplora URL must use https")
-    return url
+    try:
+        return validate_chain_url(url, mainnet=coin.is_mainnet)
+    except GuardError as exc:
+        raise AdapterError(str(exc)) from None
 
 
 def open_watch_wallet(coin, directory, external: str, internal: str, client, esplora_url: str):
     """Public-descriptor wallet. ``sign_and_broadcast`` is replaced and cannot spend."""
-    _reject_private(external)
-    _reject_private(internal)
+    assert_public_descriptor(external, coin.network)
+    assert_public_descriptor(internal, coin.network)
     cfg = btc_config(coin, directory, esplora_url)
     wallet = BtcWallet.__new__(BtcWallet)
     wallet.cfg = cfg

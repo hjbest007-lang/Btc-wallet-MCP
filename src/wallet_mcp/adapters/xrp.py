@@ -8,12 +8,13 @@ addresses require one. Nothing in the unit tests submits a transaction.
 from __future__ import annotations
 
 import json
-import urllib.request
 
 from xrpl.core.addresscodec import is_valid_classic_address
 from xrpl.models.transactions import Payment
 from xrpl.transaction import sign
 from xrpl.wallet import Wallet
+
+from btc_wallet_mcp.guard import GuardError, open_chain, validate_chain_url
 
 from .base import AdapterError, ChainAdapter, PreparedTransfer
 
@@ -44,11 +45,10 @@ def _classic(address: str) -> str:
 
 
 def _require_https(url: str, *, mainnet: bool) -> str:
-    if mainnet and not url.startswith("https://"):
-        raise AdapterError("mainnet RPC URL must use https")
-    if url.startswith("http://") and not url.startswith(("http://127.0.0.1", "http://localhost")):
-        raise AdapterError("RPC URL must use https")
-    return url.rstrip("/")
+    try:
+        return validate_chain_url(url, mainnet=mainnet)
+    except GuardError as exc:
+        raise AdapterError(str(exc)) from None
 
 
 def exchange_addresses(env=None) -> dict[str, str]:
@@ -104,9 +104,8 @@ def default_rpc(network: str, env, *, mainnet: bool) -> str:
 
 def rpc_call(url: str, method: str, params: dict) -> dict:
     payload = json.dumps({"method": method, "params": [params]}).encode()
-    request = urllib.request.Request(url, data=payload, headers={"Content-Type": "application/json"})
     try:
-        with urllib.request.urlopen(request, timeout=20) as response:
+        with open_chain(url, data=payload, headers={"Content-Type": "application/json"}, timeout=20) as response:
             body = json.load(response)
     except Exception as exc:
         raise AdapterError(f"rpc failed: {type(exc).__name__}") from None
