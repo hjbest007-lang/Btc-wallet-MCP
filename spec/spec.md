@@ -14,4 +14,4 @@
 - A6 Unit tests zijn offline en mocken het send-pad. Geen echte transactie, ook niet op testnet. Bestaande `btc_wallet_mcp`-tests blijven groen.
 - A7 Een limiet boven het goedgekeurde plafond zonder geldige HMAC wordt bij het laden geweigerd.
 
-**Buiten scope:** Lightning, multisig, hardware wallets, RBF/CPFP, publicatie naar mainnet-fondsen. XRP destination tags zitten in de approval-HMAC. Testnet-integratietests zijn opt-in en broadcasten niet.
+**Buiten scope:** Lightning, multisig, RBF/CPFP, publicatie naar mainnet-fondsen. XRP destination tags zitten in de approval-HMAC. Testnet-integratietests zijn opt-in en broadcasten niet. Hardware-signing (PSBT / EIP-712) is een owner-CLI; de agent kan die niet starten en de server broadcast die handtekening niet.

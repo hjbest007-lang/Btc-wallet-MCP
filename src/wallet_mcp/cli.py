@@ -23,8 +23,9 @@ from .config import (
     propose_limits,
 )
 from .configure import interactive_select, make_httpd
+from .hardware import HardwareError, device_by_name, payload_hash, sign_cold_payment
 from .material import new_secret, watch_document
-from .policy import Policy, approval_code, limit_approval_code
+from .policy import Policy, approval_code, hardware_approval_code, limit_approval_code
 from .util import atomic_json, format_amount
 from .watch import assert_watch_only
 
@@ -176,6 +177,42 @@ def _validate_import(coin_id: str, network: str, document: dict) -> None:
             raise ConfigError("watch-only import contains a private key")
 
 
+def cmd_hw_sign(cfg, args) -> None:
+    """Cold hardware signature. Not an MCP tool. Never broadcasts."""
+    if cfg.mode == "agent":
+        raise SystemExit("refusing: the agent cannot start hardware signing")
+    _tty()
+    with open(args.file) as handle:
+        document = json.loads(handle.read())
+    from .hardware import payment_summary
+    try:
+        summary = payment_summary(document)
+    except HardwareError as exc:
+        raise SystemExit(str(exc)) from None
+    print(
+        f"Cold hardware signature ({args.device})\n"
+        f"Coin    : {summary['coin']}\nNetwork : {summary['network']}\n"
+        f"To      : {summary['address']}\nAmount  : {summary['amount']}\nFee     : {summary['fee']}\n"
+        "This does not spend the hot wallet and it does not broadcast."
+    )
+    if input("Ask the device to sign exactly this? type 'yes': ").strip() != "yes":
+        raise SystemExit("not approved")
+    secret = cfg.env.get("WALLET_MCP_APPROVAL_SECRET") or getpass.getpass("Approval secret: ")
+    code = hardware_approval_code(
+        secret, summary["coin"], summary["network"], summary["address"],
+        summary["amount"], summary["fee"], payload_hash(document),
+    )
+    try:
+        result = sign_cold_payment(
+            mode=cfg.mode, document=document, approval=code, secret=secret,
+            device=device_by_name(args.device), tty_ok=True,
+        )
+    except HardwareError as exc:
+        raise SystemExit(str(exc)) from None
+    print("signed on device; not broadcast")
+    print(result["signature_hex"])
+
+
 def cmd_approve(cfg, args) -> None:
     _tty()
     _require_coin(args.coin)
@@ -289,6 +326,10 @@ def main(argv=None) -> None:
     backup.add_argument("--coin", required=True)
     backup.add_argument("--role", choices=("hot", "cold"), default="hot")
 
+    hw = sub.add_parser("hw-sign", help="sign a cold payment on a Ledger or Trezor (TTY, owner only)")
+    hw.add_argument("--device", choices=("ledger", "trezor"), required=True)
+    hw.add_argument("--file", required=True, help="unsigned PSBT or EIP-712 JSON")
+
     sub.add_parser("serve", help="run the MCP stdio server")
 
     args = parser.parse_args(argv)
@@ -306,6 +347,8 @@ def main(argv=None) -> None:
         return cmd_init(cfg, args)
     if args.cmd == "import-watch":
         return cmd_import_watch(cfg, args)
+    if args.cmd == "hw-sign":
+        return cmd_hw_sign(cfg, args)
     if args.cmd == "approve":
         return cmd_approve(cfg, args)
     if args.cmd == "request-limit":

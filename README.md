@@ -36,7 +36,15 @@ The agent earns and pays for services on the owner's behalf. It spends from a **
 | Can the server sign? | No. There is no cold send tool | Yes, after a per-payment approval code, inside the limits |
 | What bounds the loss | The cold key is not on this host | The balance the owner deposited, and the daily limit |
 
-Top-ups are ordinary transfers the owner sends from their own cold wallet to the hot receive address. This server does not build or sign those top-ups.
+Top-ups are ordinary transfers the owner sends from their own cold wallet to the hot receive address. This server does not broadcast those top-ups.
+
+A large cold payment can be signed on the **owner's** machine with a Ledger or Trezor:
+
+```bash
+wallet-mcp hw-sign --device ledger --file unsigned.json
+```
+
+`unsigned.json` is a PSBT description (Bitcoin, Litecoin) or an EIP-712 document (Ethereum, Avalanche). The command needs a TTY and the approval secret. It then asks the device to sign. The device must be confirmed physically. There is no MCP tool for this, agent mode is refused, and the server does not broadcast the signature. A hot-wallet approval code does not work here.
 
 ## Supported coins
 
@@ -204,7 +212,7 @@ The server process should run as its **own OS user** (or its own machine or cont
 | Threat | What holds | What remains |
 |---|---|---|
 | Agent (or prompt injection) tries to pay by itself | `send_payment` needs a per-payment HMAC. Limits are checked again immediately before sign. Five bad codes lock the coin | A human who approves without reading the address and amount |
-| Agent tries to spend the cold wallet | Cold tools are watch-only. `execute` refuses a non-hot wallet. Agent mode will not boot if a cold seed file is on disk | Owner copies `owner-cold/` onto the agent host and ignores the warning |
+| Agent tries to spend the cold wallet | Cold tools are watch-only. `execute` refuses a non-hot wallet. Agent mode will not boot if a cold seed file is on disk. `hw-sign` is not an MCP tool and refuses agent mode before it talks to a device | Owner copies `owner-cold/` onto the agent host and ignores the warning, or confirms a hardware prompt they did not read |
 | Agent raises its own limit | Increases need `approve-limit` and an HMAC stored next to the ceiling. The configure UI cannot complete an increase | Same OS user as the server, so the agent can read the secret |
 | Agent calls a coin that was not selected | That adapter is not registered. The tool name does not exist | – |
 | Tampered unsigned payload | The adapter re-checks address, amount, and fee against the approved payment before sign | A bug in a new adapter; keep the "do not override `execute`" test |
@@ -212,7 +220,7 @@ The server process should run as its **own OS user** (or its own machine or cont
 | Accidental mainnet | Disabled until `WALLET_MCP_<COIN>_ALLOW_MAINNET=I_UNDERSTAND_REAL_MONEY` | – |
 | Stolen disk | scrypt (N=2^17) + AES-256-GCM | A weak passphrase |
 
-Out of scope: Lightning, multisig, hardware wallets, RBF/CPFP, coin control.
+Out of scope: Lightning, multisig, RBF/CPFP, coin control. Hardware signing is owner-side only (Ledger or Trezor); the agent cannot start it, and this server does not broadcast the result.
 
 ## Bitcoin-only server
 
