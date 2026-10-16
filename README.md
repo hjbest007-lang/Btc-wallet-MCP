@@ -203,6 +203,7 @@ File: `$WALLET_MCP_DATA_DIR/config.json` (default `~/.wallet-mcp/config.json`). 
 | `WALLET_MCP_MODE` | `owner` | `agent` refuses cold-seed creation and refuses to start if a cold seed is present |
 | `WALLET_MCP_PASSPHRASE` | – | decrypts hot seeds (min 12 chars) |
 | `WALLET_MCP_APPROVAL_SECRET` | – | without it, sending is disabled |
+| `WALLET_MCP_APPROVAL_WEBHOOK_URL` | – | optional HTTPS (or localhost HTTP) POST when a payment is waiting for approval. Failure is logged and does not block prepare. The body has no secret and no approval code |
 | `WALLET_MCP_<COIN>_ALLOW_MAINNET` | – | must be `I_UNDERSTAND_REAL_MONEY` to enable that coin on mainnet |
 | `WALLET_MCP_BTC_ESPLORA_URL` | mempool.space for the network | https required on mainnet |
 | `WALLET_MCP_ETH_RPC_URL` / `WALLET_MCP_AVAX_RPC_URL` / `WALLET_MCP_XRP_RPC_URL` / `WALLET_MCP_LTC_ESPLORA_URL` | public testnet endpoints | https, except localhost |
@@ -225,7 +226,7 @@ A file that raises a ceiling without a valid HMAC is rejected at startup. Loweri
 
 **Assets:** cold seeds (owner machine only), hot seeds, the funds on the hot wallets, the approval secret.
 
-The server process should run as its **own OS user** (or its own machine or container). The agent user must not be able to read that user's environment (`/proc/<pid>/environ`), `config.json`, or `seed.enc`. The approval secret is never returned by a tool, never written to the config file, and never logged. Logs go to stderr and contain ids and amounts, not secrets.
+The server process should run as its **own OS user** (or its own machine or container). The agent user must not be able to read that user's environment (`/proc/<pid>/environ`), `config.json`, or `seed.enc`. The approval secret is never returned by a tool, never written to the config file, and never logged. Logs go to stderr and contain ids and amounts, not secrets. `audit.log` in the data directory records every prepare, approve, and send attempt the same way (mode `0600`). It does not store codes or secrets.
 
 | Threat | What holds | What remains |
 |---|---|---|

@@ -12,6 +12,7 @@ import sys
 
 from btc_wallet_mcp.keystore import read_seed_file, write_seed_file
 
+from .audit import AuditLog
 from .coins import COIN_ORDER, COINS
 from .disclaimer import configure_banner
 from .config import (
@@ -233,8 +234,17 @@ def cmd_approve(cfg, args) -> None:
         f"Amount  : {format_amount(pending.coin, pending.amount)}\n"
         f"Fee     : {format_amount(pending.coin, pending.fee)}\nMemo    : {pending.memo}"
     )
+    audit = AuditLog(cfg.data_dir / "audit.log")
     if input("Approve exactly this hot-wallet payment? type 'yes': ").strip() != "yes":
+        audit.record(
+            "approve_fail", coin=pending.coin, network=pending.network, confirm_id=pending.confirm_id,
+            address=pending.address, amount=pending.amount, fee=pending.fee, ok=False, error="not approved",
+        )
         raise SystemExit("not approved")
+    audit.record(
+        "approve_ok", coin=pending.coin, network=pending.network, confirm_id=pending.confirm_id,
+        address=pending.address, amount=pending.amount, fee=pending.fee, ok=True,
+    )
     secret = cfg.env.get("WALLET_MCP_APPROVAL_SECRET") or getpass.getpass("Approval secret: ")
     print("Approval code:", approval_code(
         secret, pending.coin, pending.network, pending.role, pending.confirm_id,

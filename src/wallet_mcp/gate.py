@@ -49,7 +49,8 @@ def _issue(pending) -> SpendAuthorization:
 
 
 class PaymentGate:
-    def __init__(self, adapters: dict, policies: dict, broadcasters: dict, secret_provider, ttl: dict | None = None):
+    def __init__(self, adapters: dict, policies: dict, broadcasters: dict, secret_provider, ttl: dict | None = None,
+                 auditor=None, notifier=None):
         """``adapters`` is hot wallets only, keyed by coin id.
 
         ``broadcasters`` are held here and passed into ``execute`` only after
@@ -60,6 +61,8 @@ class PaymentGate:
         self.broadcasters = broadcasters
         self._secret = secret_provider
         self.ttl = ttl or {}
+        self.auditor = auditor
+        self.notifier = notifier
 
     def _hot(self, coin: str, *, spend: bool):
         if coin not in self.adapters:
@@ -105,9 +108,12 @@ class PaymentGate:
                 address, amount, prepared.fee, memo, prepared.payload, extra=prepared.extra
             )
         except (PolicyError, AdapterError) as exc:
+            self._audit("prepare_fail", coin=coin, address=address, amount=amount, ok=False, error=str(exc))
             return {"ok": False, "error": str(exc)}
         except Exception as exc:
             log.warning("prepare failed: %s", type(exc).__name__)
+            self._audit("prepare_fail", coin=coin, address=address, amount=amount, ok=False,
+                        error=type(exc).__name__)
             return {"ok": False, "error": f"cannot build transaction: {type(exc).__name__}"}
         log.info("prepared %s %s: %s + fee %s", coin, pending.confirm_id, amount, prepared.fee)
         body = {
@@ -142,6 +148,14 @@ class PaymentGate:
             body["unsigned_psbt"] = prepared.payload
             body["amount_sats"] = amount
             body["fee_sats"] = prepared.fee
+        self._audit(
+            "prepare_ok", coin=coin, network=policy.network, confirm_id=pending.confirm_id,
+            address=address, amount=amount, fee=prepared.fee, ok=True,
+        )
+        if self.notifier is not None:
+            hook_error = self.notifier.approval_requested(body)
+            if hook_error:
+                self._audit("webhook_fail", coin=coin, confirm_id=pending.confirm_id, ok=False, error=hook_error)
         return body
 
     def send_payment(self, coin: str, confirm_id: str, approval_code: str) -> dict:
@@ -176,10 +190,30 @@ class PaymentGate:
                 parent, gas = parent_gas
                 self.policies[parent].note_external_fee(txid, gas, f"gas for {coin}")
         except (PolicyError, AdapterError) as exc:
-            return {"ok": False, "error": str(exc)}
+            message = str(exc)
+            event = "approve_fail" if "approval" in message else "send_fail"
+            self._audit(
+                event, coin=coin, confirm_id=confirm_id,
+                address=getattr(pending, "address", ""), amount=getattr(pending, "amount", None),
+                fee=getattr(pending, "fee", None), ok=False, error=message,
+            )
+            return {"ok": False, "error": message}
         except Exception as exc:
             log.warning("send failed: %s", type(exc).__name__)
+            self._audit("send_fail", coin=coin, confirm_id=confirm_id, ok=False, error=type(exc).__name__)
             return {"ok": False, "error": f"broadcast failed: {type(exc).__name__}"}
         log.info("sent %s %s txid=%s", coin, confirm_id, txid)
+        self._audit(
+            "send_ok", coin=coin, confirm_id=confirm_id, address=pending.address,
+            amount=pending.amount, fee=pending.fee, txid=txid, ok=True,
+        )
         return {"ok": True, "txid": txid, "coin": coin, "amount": pending.amount, "fee": pending.fee,
                 "unit": policy.unit}
+
+    def _audit(self, event: str, **fields) -> None:
+        if self.auditor is None:
+            return
+        try:
+            self.auditor.record(event, **fields)
+        except Exception as exc:
+            log.warning("audit log failed: %s", type(exc).__name__)
