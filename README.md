@@ -1,6 +1,23 @@
 # wallet-mcp
 
-> **Experimental, unreviewed software.** Every coin starts on a **test network** (Bitcoin: **signet**). It has not had an independent security review. Do not use it on mainnet with real funds until it has been reviewed.
+> **Disclaimer — experimental, unaudited software. Use at your own risk.**
+> There is **no warranty** (see the [MIT license](LICENSE)). This is **not**
+> financial, legal, or tax advice. You are responsible for your keys, seeds,
+> limits, and for complying with local law, including tax and AML/KYC.
+> **Funds can be lost** because of bugs, AI-agent mistakes, prompt injection,
+> or a compromised system. **Mainnet only with small amounts, and only after
+> your own review.** Authors and contributors are **not liable**.
+> Full text: [DISCLAIMER.md](DISCLAIMER.md).
+>
+> *Nederlandse samenvatting: experimentele, niet-geauditeerde software; gebruik
+> op eigen risico; geen garantie (MIT); geen financieel, juridisch of fiscaal
+> advies; jij bent verantwoordelijk voor sleutels, seeds, limieten en naleving
+> van lokale wetgeving (belasting, AML/KYC); verlies van funds is mogelijk;
+> mainnet alleen met kleine bedragen na eigen review; auteurs en contributors
+> zijn niet aansprakelijk.*
+
+Every coin starts on a **test network** (Bitcoin: **signet**). Do not treat a
+green test suite as a security review.
 
 A small **multi-coin hot wallet** exposed as an **MCP stdio server**. An AI agent can pay for things online, but **only after a human approves that exact payment**. The agent's spending key is separate from the owner's savings.
 
