@@ -39,6 +39,7 @@ from .adapters.xrp import (
     exchange_addresses,
     submit_blob,
 )
+from .audit import AuditLog, WebhookNotifier
 from .config import AppConfig, ConfigError
 from .gate import PaymentGate
 from .policy import Policy
@@ -477,7 +478,11 @@ def build_runtime(cfg: AppConfig, factories: dict | None = None) -> Runtime:
         )
         ttl[coin_id] = coin.spec.confirm_ttl_seconds
     secret = lambda: cfg.env.get("WALLET_MCP_APPROVAL_SECRET")  # noqa: E731
-    gate = PaymentGate(hot, policies, broadcasters, secret, ttl)
+    gate = PaymentGate(
+        hot, policies, broadcasters, secret, ttl,
+        auditor=AuditLog(cfg.data_dir / "audit.log"),
+        notifier=WebhookNotifier(cfg.env.get("WALLET_MCP_APPROVAL_WEBHOOK_URL")),
+    )
     return Runtime(cfg, gate, hot, cold)
 
 
