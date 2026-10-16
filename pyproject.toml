@@ -1,7 +1,7 @@
 [project]
 name = "btc-wallet-mcp"
 version = "0.2.0"
-description = "Human-approved multi-coin hot wallet (BTC, ETH, AVAX, XRP, LTC) as an MCP stdio server"
+description = "Human-approved multi-coin hot wallet (BTC, ETH, AVAX, XRP, LTC, USDC, USDT, SOL) as an MCP stdio server"
 license = {text = "MIT"}
 requires-python = ">=3.11"
 dependencies = [
@@ -11,6 +11,7 @@ dependencies = [
     "eth-account>=0.13,<1",
     "xrpl-py>=4,<6",
     "embit>=0.7,<1",
+    "solders>=0.21,<1",
 ]
 
 [project.optional-dependencies]

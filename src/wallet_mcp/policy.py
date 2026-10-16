@@ -217,6 +217,26 @@ class Policy:
         state["failed"] = 0
         atomic_json(self.state_path, state)
 
+    def note_external_fee(self, txid: str, fee: int, memo: str) -> None:
+        """Record gas paid by a parent chain for a token transfer.
+
+        The token ledger counts the token amount. This entry counts the native
+        fee against the parent coin's daily limit. It does not touch a pending
+        payment.
+        """
+        if not isinstance(fee, int) or isinstance(fee, bool) or fee < 0:
+            raise PolicyError("fee must be a non-negative integer")
+        ledger = self._ledger()
+        ledger.append({
+            "ts": self.now(),
+            "txid": txid,
+            "address": "gas",
+            "total": fee,
+            "memo": memo[:140],
+            "coin": self.coin,
+        })
+        atomic_json(self.ledger_path, ledger)
+
     def consume(self, pending: Pending, txid: str) -> None:
         state = self._state()
         state["pending"].pop(pending.confirm_id, None)

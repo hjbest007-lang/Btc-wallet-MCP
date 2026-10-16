@@ -19,7 +19,11 @@ def new_secret(coin_id: str) -> str:
         if not wallet.seed:
             raise ConfigError("XRP key generation failed")
         return wallet.seed
-    if coin_id not in {"btc", "eth", "avax", "ltc"}:
+    if coin_id in {"usdc_eth", "usdt_eth"}:
+        raise ConfigError("USDC and USDT on Ethereum use the eth hot wallet; run init --coin eth")
+    if coin_id in {"usdc_avax", "usdt_avax"}:
+        raise ConfigError("USDC and USDT on Avalanche use the avax hot wallet; run init --coin avax")
+    if coin_id not in {"btc", "eth", "avax", "ltc", "sol"}:
         raise ConfigError(f"unknown coin {coin_id}")
     return new_mnemonic()
 
@@ -27,8 +31,11 @@ def new_secret(coin_id: str) -> str:
 def watch_document(coin_id: str, network: str, secret: str) -> dict:
     if coin_id == "btc":
         document = public_descriptors(secret, network)
-    elif coin_id in {"eth", "avax"}:
+    elif coin_id in {"eth", "avax", "usdc_eth", "usdt_eth", "usdc_avax", "usdt_avax"}:
         document = {"kind": "address", "address": account_from_mnemonic(secret).address}
+    elif coin_id == "sol":
+        from .adapters.solana import keypair_from_mnemonic
+        document = {"kind": "address", "address": str(keypair_from_mnemonic(secret).pubkey())}
     elif coin_id == "xrp":
         from xrpl.wallet import Wallet
         document = {"kind": "address", "address": Wallet.from_seed(secret).classic_address}

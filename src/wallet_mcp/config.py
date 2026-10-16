@@ -14,7 +14,7 @@ import time
 from dataclasses import dataclass, field
 from pathlib import Path
 
-from .coins import COIN_ORDER, COINS, CoinSpec, mainnet_opted_in
+from .coins import COIN_ORDER, COINS, TOKEN_PARENTS, CoinSpec, mainnet_opted_in
 from .disclaimer import MAINNET_WARNING
 from .policy import LimitRequest, PolicyError, limit_approval_code, limits_mac
 from .util import atomic_json, ensure_dir
@@ -243,6 +243,9 @@ def apply_enabled(cfg: AppConfig, enabled: set[str]) -> list[str]:
         spec = COINS[coin_id]
         slot = cfg.raw["coins"][coin_id]
         turn_on = coin_id in enabled
+        parent = TOKEN_PARENTS.get(coin_id)
+        if turn_on and parent and parent not in enabled:
+            raise ConfigError(f"{coin_id} uses the {parent} wallet; enable {parent} as well")
         if turn_on and COINS[coin_id].networks[slot["network"]].mainnet and not mainnet_opted_in(cfg.env, coin_id):
             raise ConfigError(
                 f"refusing to enable {coin_id} on mainnet without {_mainnet_hint(coin_id)}"

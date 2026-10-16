@@ -16,6 +16,25 @@ MAX_MEMO = 140
 gate_seal = object()
 
 
+def _parent_gas_of(adapter, extra: str):
+    """Native gas a token payment must also fit inside the parent coin's limits.
+
+    Returns ``(parent_coin, gas_wei)`` or ``None`` for a native-coin payment.
+    """
+    parent = getattr(adapter, "parent_fee_coin", None)
+    if not parent:
+        return None
+    if not isinstance(extra, str) or not extra.startswith("gas:"):
+        raise AdapterError("token payment is missing its gas binding")
+    try:
+        gas = int(extra.split(":", 1)[1])
+    except ValueError:
+        raise AdapterError("token payment is missing its gas binding") from None
+    if isinstance(gas, bool) or gas < 1:
+        raise AdapterError("token payment is missing its gas binding")
+    return parent, gas
+
+
 def _issue(pending) -> SpendAuthorization:
     return SpendAuthorization(
         coin=pending.coin,
@@ -52,6 +71,16 @@ class PaymentGate:
             raise PolicyError("hot wallet cannot sign; cold keys are never loaded on this server")
         return adapter
 
+    def _parent_gas(self, adapter, extra: str):
+        found = _parent_gas_of(adapter, extra)
+        if found is None:
+            return None
+        parent, gas = found
+        if parent not in self.policies:
+            raise PolicyError(f"{adapter.coin_id} requires {parent} to be enabled")
+        self.policies[parent].check_total(0, gas)
+        return parent, gas
+
     def _policy(self, coin: str) -> Policy:
         if coin not in self.policies:
             raise PolicyError(f"{coin} is not enabled")
@@ -71,6 +100,7 @@ class PaymentGate:
             if prepared.address != address or prepared.amount != amount:
                 raise AdapterError("adapter prepare did not match the requested payment")
             policy.check_total(prepared.amount, prepared.fee)
+            self._parent_gas(adapter, prepared.extra)
             pending = policy.add_pending(
                 address, amount, prepared.fee, memo, prepared.payload, extra=prepared.extra
             )
@@ -106,6 +136,8 @@ class PaymentGate:
             body["approval_extra"] = prepared.extra
             if prepared.extra.startswith("tag:"):
                 body["destination_tag"] = int(prepared.extra.split(":", 1)[1])
+            if prepared.extra.startswith("gas:"):
+                body["network_fee"] = int(prepared.extra.split(":", 1)[1])
         if coin == "btc":
             body["unsigned_psbt"] = prepared.payload
             body["amount_sats"] = amount
@@ -122,6 +154,7 @@ class PaymentGate:
                 raise PolicyError("confirm_id is for a different coin")
             policy.verify_approval(pending, approval_code, self._secret())
             policy.check_total(pending.amount, pending.fee)
+            parent_gas = self._parent_gas(adapter, pending.extra)
             # Single use, even if broadcast fails afterwards.
             policy.discard(pending.confirm_id)
             prepared = PreparedTransfer(
@@ -139,6 +172,9 @@ class PaymentGate:
 
             txid = adapter.execute(prepared, authorization, once)
             policy.consume(pending, txid)
+            if parent_gas is not None:
+                parent, gas = parent_gas
+                self.policies[parent].note_external_fee(txid, gas, f"gas for {coin}")
         except (PolicyError, AdapterError) as exc:
             return {"ok": False, "error": str(exc)}
         except Exception as exc:
