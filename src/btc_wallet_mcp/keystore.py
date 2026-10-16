@@ -66,10 +66,10 @@ def write_seed_file(path: Path, mnemonic: str, passphrase: str, *, n: int = SCRY
         f.write(data)
 
 
-def read_seed_file(path: Path, passphrase: str) -> str:
+def read_seed_file(path: Path, passphrase: str, *, missing_message: str | None = None) -> str:
     path = Path(path)
     if not path.exists():
-        raise KeystoreError("no wallet found; run `btc-wallet-mcp init` first")
+        raise KeystoreError(missing_message or "no wallet found; run `btc-wallet-mcp init` first")
     if os.name == "posix" and path.stat().st_mode & 0o077:
         raise KeystoreError(f"{path} permissions too open; chmod 600")
     return decrypt_seed(json.loads(path.read_text()), passphrase)

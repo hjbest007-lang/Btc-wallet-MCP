@@ -1,10 +1,18 @@
 # Tasks
-- [x] T1 spec-artefacten
-- [x] T2 config + mainnet-guard
-- [x] T3 keystore (encrypt/decrypt, perms)
-- [x] T4 policy (limieten, ledger, approval HMAC, lockout, expiry)
-- [x] T5 wallet-wrapper (BDK + Esplora)
-- [x] T6 MCP-server + CLI
+- [x] T1 spec-artefacten (oorspronkelijke Bitcoin-wallet)
+- [x] T2 config + mainnet-guard (Bitcoin-only)
+- [x] T3 keystore
+- [x] T4 policy (Bitcoin-only)
+- [x] T5 BDK-wallet
+- [x] T6 MCP-server + CLI (Bitcoin-only)
 - [x] T7 unit-tests + signet-integratietest
-- [x] T8 README (dreigingsmodel, install, backup), LICENSE
-- [x] T9 converge: acceptatie A1–A6 nagelopen
+- [x] T8 README, LICENSE
+- [x] T9 acceptatie A1–A6 van de Bitcoin-only spec
+- [x] T10 chain-adapter + centrale gate (approval en limieten, niet omzeilbaar)
+- [x] T11 Bitcoin-adapter delegeert naar BDK; bestaande tests blijven groen
+- [x] T12 per-coin config, default testnet, mainnet opt-in per coin
+- [x] T13 Ethereum, Avalanche C-chain, XRP (experimental), Litecoin (experimental)
+- [x] T14 cold/hot: watch-only cold, hot key met limieten, agent-mode weigert cold seeds
+- [x] T15 `wallet-mcp configure` (checkbox-CLI + localhost-UI); alleen enabled coins als tools; UI verhoogt geen limiet
+- [x] T16 mocked send-tests: zonder approval of boven limiet wordt er niet gebroadcast
+- [x] T17 README-tabel, Coins selecteren, security model, ROADMAP, CONTRIBUTING

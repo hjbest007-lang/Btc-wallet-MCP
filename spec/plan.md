@@ -1,7 +1,7 @@
 # Plan
-- Python 3.11+, `mcp` (FastMCP, stdio), `bdkpython` 2.2 (BDK: BIP39/BIP84, coin selection, signing, Esplora-client), `cryptography`.
-- Modules: `config.py` (env → Config, mainnet-guard), `keystore.py` (scrypt+AES-GCM seed-bestand), `policy.py` (limieten, ledger, approval-HMAC, lockout), `wallet.py` (BDK-wrapper, sqlite-cache met alleen publieke data), `server.py` (MCP-tools), `cli.py` (init/approve/backup/status).
-- Data dir `~/.btc-wallet-mcp/<network>/`: `seed.enc` (0600), `wallet.sqlite` (publiek), `ledger.json` (uitgaven), `pending.json`.
-- Approval-secret los van seed-passphrase (`BTC_WALLET_APPROVAL_SECRET`), alleen in de omgeving van de server en van de mens, nooit in de agent-context.
-- Risico's: agent leest env/bestanden via andere tools (shell) → mitigatie in dreigingsmodel: server draaien onder ander OS-account / andere machine.
-- Verificatie: pytest (offline), `BTC_WALLET_INTEGRATION=1 pytest -m integration` tegen mempool.space/signet.
+- Python 3.11+, `mcp` (FastMCP, stdio). Bitcoin blijft `bdkpython` 2.2. EVM (Ethereum + Avalanche C-chain) via `eth-account`. XRP via `xrpl-py`. Litecoin (experimental) via `embit` met Litecoin bech32-HRP. Seed-encryptie blijft `cryptography`.
+- `btc_wallet_mcp` blijft de Bitcoin-only server, ongewijzigd gedrag.
+- Nieuw pakket `wallet_mcp`: `coins` (catalogus, default testnet, limieten), `config` (bestand + mainnet-vlag per coin + HMAC op verhoogde plafonds), `policy` (ledger, approval, lockout), `gate` (enige spend-pad; broadcaster pas na approval), `adapters/*`, `registry` (alleen enabled coins), `server`, `configure` (checkbox-CLI + localhost-UI), `cli`.
+- Data `~/.wallet-mcp/<coin>/<network>/`: `hot/seed.enc`, `cold/watch.json` (geen secrets), `owner-cold/seed.enc` alleen op de eigenaarsmachine, `policy/` voor ledger en pending.
+- `WALLET_MCP_MODE=agent` weigert cold-init en start niet als er een cold seed op de host staat.
+- Verificatie: `pytest -q` offline. Geen broadcast. Bestaande signet-integratietest blijft opt-in en leest alleen.
