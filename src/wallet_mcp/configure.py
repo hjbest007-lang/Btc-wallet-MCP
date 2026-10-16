@@ -13,6 +13,7 @@ from urllib.parse import parse_qs
 
 from .coins import COIN_ORDER, COINS
 from .config import ConfigError, apply_enabled, load_config, propose_limits
+from .disclaimer import DUTCH_SUMMARY, SHORT_WARNING
 
 MAX_BODY = 64_000
 
@@ -74,9 +75,12 @@ def render_page(cfg, token: str, notice: str = "") -> str:
   body {{ font: 16px/1.4 sans-serif; max-width: 42rem; margin: 2rem auto; padding: 0 1rem; }}
   fieldset {{ margin: 1rem 0; }}
   .notice {{ background: #f4f1e8; padding: .75rem; }}
+  .warn {{ background: #f8e8e4; padding: .75rem; }}
   button {{ font: inherit; padding: .4rem .8rem; }}
 </style></head><body>
 <h1>Coins selecteren</h1>
+<p class="warn">{html.escape(SHORT_WARNING)}</p>
+<p class="warn">{html.escape(DUTCH_SUMMARY)}</p>
 <p>Only checked coins are loaded as MCP tools the next time the server starts.
 The cold wallet stays on your machine. This page cannot raise a limit: an increase
 is stored as a request until you run <code>wallet-mcp approve-limit</code>.</p>

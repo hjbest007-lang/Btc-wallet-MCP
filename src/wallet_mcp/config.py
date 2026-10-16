@@ -15,6 +15,7 @@ from dataclasses import dataclass, field
 from pathlib import Path
 
 from .coins import COIN_ORDER, COINS, CoinSpec, mainnet_opted_in
+from .disclaimer import MAINNET_WARNING
 from .policy import LimitRequest, PolicyError, limit_approval_code, limits_mac
 from .util import atomic_json, ensure_dir
 
@@ -249,6 +250,8 @@ def apply_enabled(cfg: AppConfig, enabled: set[str]) -> list[str]:
         slot["enabled"] = turn_on
         if turn_on and spec.experimental:
             warnings.append(f"{spec.name} is experimental")
+        if turn_on and COINS[coin_id].networks[slot["network"]].mainnet:
+            warnings.append(f"{coin_id}: {MAINNET_WARNING}")
     save_config(cfg)
     return warnings
 

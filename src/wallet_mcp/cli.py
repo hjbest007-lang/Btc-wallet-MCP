@@ -13,6 +13,7 @@ import sys
 from btc_wallet_mcp.keystore import read_seed_file, write_seed_file
 
 from .coins import COIN_ORDER, COINS
+from .disclaimer import configure_banner
 from .config import (
     ConfigError,
     apply_enabled,
@@ -64,6 +65,8 @@ def _require_coin(coin_id: str) -> None:
 
 
 def cmd_configure(cfg, args) -> None:
+    print(configure_banner())
+    print()
     if args.web:
         port = args.port
         httpd = make_httpd(cfg.env, port)
