@@ -1,5 +1,10 @@
-"""The only spend path. Every coin uses it; adapters cannot reach a broadcaster
-until ``send_payment`` has checked the human code and the limits again.
+"""The only spend path. Every coin uses it.
+
+Adapters cannot reach a broadcaster until ``send_payment`` has checked the
+human code and the limits again, or until ``prepare_payment`` has reserved an
+owner-granted autonomous budget under the same file lock. A payment above
+that budget still needs ``wallet-mcp approve``. Cold wallets never auto-spend.
+The budget is base units on the coin; nothing here asks a price oracle.
 """
 from __future__ import annotations
 
@@ -115,6 +120,9 @@ class PaymentGate:
             self._audit("prepare_fail", coin=coin, address=address, amount=amount, ok=False,
                         error=type(exc).__name__)
             return {"ok": False, "error": f"cannot build transaction: {type(exc).__name__}"}
+        auto_body = self._auto_execute(adapter, policy, pending)
+        if auto_body is not None:
+            return auto_body
         log.info("prepared %s %s: %s + fee %s", coin, pending.confirm_id, amount, prepared.fee)
         body = {
             "ok": True,
@@ -174,27 +182,7 @@ class PaymentGate:
                 self.policies[parent].note_external_fee(
                     "", gas, f"gas for {coin}", confirm_id=pending.confirm_id,
                 )
-            prepared = PreparedTransfer(
-                pending.address, pending.amount, pending.fee, pending.payload, extra=pending.extra,
-            )
-            authorization = _issue(pending)
-            broadcaster = self.broadcasters[coin]
-            fired = {"n": 0}
-
-            def once(raw):
-                if fired["n"]:
-                    raise AdapterError("broadcaster already used for this payment")
-                fired["n"] += 1
-                return broadcaster(raw)
-
-            txid = adapter.execute(prepared, authorization, once)
-            try:
-                policy.attach_txid(pending, txid)
-                if parent_gas is not None:
-                    parent, _gas = parent_gas
-                    self.policies[parent].attach_txid(pending, txid)
-            except PolicyError:
-                log.warning("ledger update failed after broadcast")
+            txid = self._broadcast(coin, adapter, policy, pending, parent_gas)
         except (PolicyError, AdapterError) as exc:
             message = str(exc)
             event = "approve_fail" if "approval" in message else "send_fail"
@@ -215,6 +203,111 @@ class PaymentGate:
         )
         return {"ok": True, "txid": txid, "coin": coin, "amount": pending.amount, "fee": pending.fee,
                 "unit": policy.unit}
+
+    def _broadcast(self, coin: str, adapter, policy: Policy, pending, parent_gas) -> str:
+        """Hand the one-shot broadcaster to the adapter. The spend is already reserved."""
+        prepared = PreparedTransfer(
+            pending.address, pending.amount, pending.fee, pending.payload, extra=pending.extra,
+        )
+        authorization = _issue(pending)
+        broadcaster = self.broadcasters[coin]
+        fired = {"n": 0}
+
+        def once(raw):
+            if fired["n"]:
+                raise AdapterError("broadcaster already used for this payment")
+            fired["n"] += 1
+            return broadcaster(raw)
+
+        txid = adapter.execute(prepared, authorization, once)
+        try:
+            policy.attach_txid(pending, txid)
+            if parent_gas is not None:
+                parent, _gas = parent_gas
+                self.policies[parent].attach_txid(pending, txid)
+        except PolicyError:
+            log.warning("ledger update failed after broadcast")
+        return txid
+
+    def _auto_execute(self, adapter, policy: Policy, pending) -> dict | None:
+        """Broadcast when the payment fits the autonomous budget.
+
+        Returns None to keep the normal approval flow. Returns an error dict
+        when the budget check fails closed (a bad config MAC, a lost race on
+        the hard daily limit) or the broadcast fails after the spend was
+        reserved. Cold wallets and unsigned hot wallets never take this path.
+        """
+        if adapter.role != "hot" or not adapter.can_sign:
+            return None
+        if not self._secret():
+            return None
+        parent_gas = None
+        try:
+            found = _parent_gas_of(adapter, pending.extra)
+            if found is not None:
+                parent_name, gas = found
+                if parent_name not in self.policies:
+                    raise PolicyError(f"{adapter.coin_id} requires {parent_name} to be enabled")
+                parent_gas = (parent_name, gas)
+                reserved = policy.reserve_auto_with_parent(
+                    pending.confirm_id, self.policies[parent_name], gas,
+                )
+            else:
+                reserved = policy.reserve_auto(pending.confirm_id)
+        except (PolicyError, AdapterError) as exc:
+            return self._auto_fail(pending, str(exc))
+        if reserved is None:
+            return None
+        try:
+            txid = self._broadcast(adapter.coin_id, adapter, policy, reserved, parent_gas)
+        except (PolicyError, AdapterError) as exc:
+            return self._auto_fail(reserved, str(exc), event="send_fail")
+        except Exception as exc:
+            log.warning("auto send failed: %s", type(exc).__name__)
+            return self._auto_fail(
+                reserved, type(exc).__name__, event="send_fail",
+                public_error=f"broadcast failed: {type(exc).__name__}",
+            )
+        log.info("auto-sent %s %s txid=%s", reserved.coin, reserved.confirm_id, txid)
+        self._audit(
+            "send_ok", coin=reserved.coin, network=policy.network, confirm_id=reserved.confirm_id,
+            address=reserved.address, amount=reserved.amount, fee=reserved.fee, txid=txid,
+            ok=True, auto=True,
+        )
+        body = {
+            "ok": True,
+            "auto": True,
+            "txid": txid,
+            "confirm_id": reserved.confirm_id,
+            "coin": reserved.coin,
+            "network": policy.network,
+            "role": "hot",
+            "address": reserved.address,
+            "amount": reserved.amount,
+            "fee": reserved.fee,
+            "unit": policy.unit,
+            "total": reserved.amount + reserved.fee,
+            "memo": reserved.memo,
+        }
+        if reserved.extra:
+            body["approval_extra"] = reserved.extra
+        notify = getattr(self.notifier, "auto_spent", None) if self.notifier is not None else None
+        if notify is not None:
+            hook_error = notify(body)
+            if hook_error:
+                self._audit(
+                    "webhook_fail", coin=reserved.coin, confirm_id=reserved.confirm_id,
+                    ok=False, error=hook_error, auto=True,
+                )
+        return body
+
+    def _auto_fail(self, pending, error: str, event: str = "send_fail", public_error: str | None = None) -> dict:
+        self._audit(
+            event, coin=getattr(pending, "coin", ""), confirm_id=getattr(pending, "confirm_id", ""),
+            address=getattr(pending, "address", ""), amount=getattr(pending, "amount", None),
+            fee=getattr(pending, "fee", None), ok=False, error=error, auto=True,
+        )
+        return {"ok": False, "error": public_error or error, "auto": True}
 
     def _audit(self, event: str, **fields) -> None:
         if self.auditor is None:

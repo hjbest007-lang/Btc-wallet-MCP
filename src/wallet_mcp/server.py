@@ -74,17 +74,20 @@ def _register_coin(app: FastMCP, runtime: Runtime, coin_id: str) -> None:
             )
 
         prepare_payment.__doc__ = (
-            f"Prepare (do NOT send) a hot {spec.name} payment. Amount is an integer in {unit}. "
+            f"Prepare a hot {spec.name} payment. Amount is an integer in {unit}. "
             "destination_tag is optional, and required for known exchange deposit addresses. "
-            "The tag is bound into the approval code. Returns a confirm_id."
+            "The tag is bound into the approval code. "
+            "A payment inside the owner's autonomous budget is broadcast now and needs no approval code. "
+            "Anything above that budget returns a confirm_id and is not sent."
         )
     else:
         def prepare_payment(address: str, amount: int, memo: str = "") -> dict:
             return runtime.gate.prepare_payment(coin_id, address, amount, memo)
 
         prepare_payment.__doc__ = (
-            f"Prepare (do NOT send) a hot {spec.name} payment. Amount is an integer in {unit}. "
-            "Returns a confirm_id. A human must approve it out of band before send works."
+            f"Prepare a hot {spec.name} payment. Amount is an integer in {unit}. "
+            "A payment inside the owner's autonomous budget is broadcast now and needs no approval code. "
+            "Anything above that budget returns a confirm_id and is not sent until a human approves it."
         )
     app.tool(name=f"{coin_id}_prepare_payment")(prepare_payment)
 
@@ -92,8 +95,8 @@ def _register_coin(app: FastMCP, runtime: Runtime, coin_id: str) -> None:
         return runtime.gate.send_payment(coin_id, confirm_id, approval_code)
 
     send_payment.__doc__ = (
-        f"Sign and broadcast a prepared hot {spec.name} payment. Requires the human approval code "
-        "for this exact payment. Never guess codes: 5 wrong codes lock sending."
+        f"Sign and broadcast a prepared hot {spec.name} payment that was above the autonomous budget. "
+        "Requires the human approval code for this exact payment. Never guess codes: 5 wrong codes lock sending."
     )
     app.tool(name=f"{coin_id}_send_payment")(send_payment)
 

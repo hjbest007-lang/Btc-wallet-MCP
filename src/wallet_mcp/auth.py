@@ -2,8 +2,9 @@
 
 Adapters receive this object as an argument of ``execute``. They cannot construct
 a valid one: the seal is a private object held by ``gate.py`` and checked by
-identity. The gate mints it only after the human approval code and the limits
-have both been checked.
+identity. The gate mints it only after the limits have been checked and either
+the human approval code matched or the payment was reserved inside the
+owner-granted autonomous budget. Cold wallets are never authorized.
 """
 from __future__ import annotations
 

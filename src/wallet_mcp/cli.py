@@ -19,15 +19,18 @@ from .disclaimer import configure_banner
 from .config import (
     ConfigError,
     apply_enabled,
+    approve_auto_budget,
     approve_limits,
+    get_auto_request,
     get_limit_request,
     load_config,
+    propose_auto_budget,
     propose_limits,
 )
 from .configure import interactive_select, make_httpd
 from .hardware import HardwareError, device_by_name, payload_hash, sign_cold_payment
 from .material import new_secret, watch_document
-from .policy import Policy, approval_code, hardware_approval_code, limit_approval_code
+from .policy import Policy, approval_code, auto_approval_code, hardware_approval_code, limit_approval_code
 from .util import atomic_json, format_amount
 from .watch import assert_watch_only
 
@@ -279,6 +282,45 @@ def cmd_approve_limit(cfg, args) -> None:
     print("limits updated")
 
 
+def cmd_approve_auto(cfg, args) -> None:
+    _tty()
+    try:
+        request = get_auto_request(cfg, args.request_id)
+    except ConfigError as exc:
+        raise SystemExit(str(exc)) from None
+    coin = cfg.coins[request.coin]
+    print(
+        f"Coin : {request.coin}\n"
+        f"From : {coin.auto_max_per_tx} / {coin.auto_max_per_day} {coin.spec.unit} (autonomous, base units)\n"
+        f"To   : {request.auto_max_per_tx} / {request.auto_max_per_day} {coin.spec.unit} (autonomous, base units)\n"
+        "Payments inside this budget are sent without a per-payment approval code.\n"
+        "Anything above it still needs `wallet-mcp approve`. Cold wallets are not included."
+    )
+    if input("Approve exactly this autonomous budget? type 'yes': ").strip() != "yes":
+        raise SystemExit("not approved")
+    secret = cfg.env.get("WALLET_MCP_APPROVAL_SECRET") or getpass.getpass("Approval secret: ")
+    code = auto_approval_code(
+        secret, request.request_id, request.coin, request.auto_max_per_tx, request.auto_max_per_day,
+    )
+    try:
+        approve_auto_budget(cfg, request.request_id, code, secret)
+    except ConfigError as exc:
+        raise SystemExit(str(exc)) from None
+    print("autonomous budget updated")
+
+
+def cmd_request_auto(cfg, args) -> None:
+    _require_coin(args.coin)
+    try:
+        status, request = propose_auto_budget(cfg, args.coin, args.auto_max_per_tx, args.auto_max_per_day)
+    except ConfigError as exc:
+        raise SystemExit(str(exc)) from None
+    if status == "pending":
+        print(f"pending {request.request_id}: run `wallet-mcp approve-auto {request.request_id}`")
+    else:
+        print(status)
+
+
 def cmd_request_limit(cfg, args) -> None:
     _require_coin(args.coin)
     try:
@@ -340,6 +382,14 @@ def main(argv=None) -> None:
     approve_limit = sub.add_parser("approve-limit", help="approve a queued limit increase (TTY)")
     approve_limit.add_argument("request_id")
 
+    auto = sub.add_parser("request-auto", help="lower an autonomous budget now, or queue an increase")
+    auto.add_argument("--coin", required=True)
+    auto.add_argument("--auto-max-per-tx", required=True, type=int)
+    auto.add_argument("--auto-max-per-day", required=True, type=int)
+
+    approve_auto = sub.add_parser("approve-auto", help="approve a queued autonomous budget increase (TTY)")
+    approve_auto.add_argument("request_id")
+
     unlock = sub.add_parser("unlock", help="reset the failed-approval counter")
     unlock.add_argument("--coin", required=True)
 
@@ -376,6 +426,10 @@ def main(argv=None) -> None:
         return cmd_request_limit(cfg, args)
     if args.cmd == "approve-limit":
         return cmd_approve_limit(cfg, args)
+    if args.cmd == "request-auto":
+        return cmd_request_auto(cfg, args)
+    if args.cmd == "approve-auto":
+        return cmd_approve_auto(cfg, args)
     if args.cmd == "unlock":
         return cmd_unlock(cfg, args)
     if args.cmd == "backup":

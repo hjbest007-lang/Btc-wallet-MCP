@@ -2,7 +2,8 @@
 
 The log stores ids, addresses, and amounts. It never stores the approval
 secret, an approval code, a seed, or a passphrase. A webhook, when configured,
-fires only after a successful prepare (an approval is now required). A webhook
+fires after a successful prepare (an approval is now required) and after an
+autonomous spend (a notification, not a request for a code). A webhook
 failure does not change the payment result.
 """
 from __future__ import annotations
@@ -22,7 +23,10 @@ _FORBIDDEN = {
     "secret", "approval_secret", "approval_code", "approval", "code",
     "seed", "mnemonic", "passphrase", "private_key", "signature", "signature_hex",
 }
-_PUBLIC = ("coin", "network", "role", "confirm_id", "address", "amount", "fee", "unit", "ok", "error", "txid")
+_PUBLIC = (
+    "coin", "network", "role", "confirm_id", "address", "amount", "fee", "unit",
+    "ok", "error", "txid", "auto",
+)
 
 
 class AuditLog:
@@ -85,6 +89,36 @@ class WebhookNotifier:
             "amount": body.get("amount"),
             "fee": body.get("fee"),
             "unit": body.get("unit"),
+        }
+        try:
+            self.poster(self.url, payload)
+        except Exception as exc:
+            log.warning("approval webhook failed: %s", type(exc).__name__)
+            return f"webhook failed: {type(exc).__name__}"
+        return None
+
+    def auto_spent(self, body: dict) -> str | None:
+        """Tell the operator a payment inside the autonomous budget was sent.
+
+        This is a notification. It does not approve anything, and it carries
+        no secret and no approval code.
+        """
+        if not self.url:
+            return None
+        if not _allowed(self.url):
+            log.warning("approval webhook refused: url scheme or host is not allowed")
+            return "webhook url refused"
+        payload = {
+            "event": "auto_spent",
+            "auto": True,
+            "coin": body.get("coin"),
+            "network": body.get("network"),
+            "confirm_id": body.get("confirm_id"),
+            "address": body.get("address"),
+            "amount": body.get("amount"),
+            "fee": body.get("fee"),
+            "unit": body.get("unit"),
+            "txid": body.get("txid"),
         }
         try:
             self.poster(self.url, payload)
