@@ -9,6 +9,8 @@ venv/
 env/
 .env
 .env.*
+deploy/secrets/approval_secret
+deploy/secrets/passphrase
 .mypy_cache/
 .ruff_cache/
 build/

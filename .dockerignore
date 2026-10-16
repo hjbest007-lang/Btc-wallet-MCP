@@ -1,0 +1,11 @@
+.git
+.venv
+venv
+__pycache__
+.pytest_cache
+*.enc
+deploy/secrets/approval_secret
+deploy/secrets/passphrase
+tests
+data
+wallet-data

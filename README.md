@@ -128,6 +128,17 @@ The Bitcoin-only CLI `btc-wallet-mcp approve` still uses the original code forma
 
 ## Install
 
+On a server, `scripts/install.sh` creates a system user `walletmcp` (shell
+`nologin`), a systemd unit that runs as that user, and
+`/etc/wallet-mcp/approval-secret` mode `0400`. The agent account is not that
+user, so it cannot read the secret. `./scripts/install.sh --dry-run` prints
+the layout and does not create anything.
+
+Docker Compose in `deploy/` runs the same way: the image user is `walletmcp`,
+and the approval secret is a compose secret file mounted only on the wallet
+service. It is not an environment variable of the image, and it must not be
+given to the agent container.
+
 ```bash
 python3 -m venv .venv && . .venv/bin/activate
 pip install -e '.[test]'

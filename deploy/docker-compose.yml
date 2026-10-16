@@ -1,0 +1,29 @@
+# The wallet server is a separate service from any agent.
+# Secrets are files mounted only on this service. Do not add
+# WALLET_MCP_APPROVAL_SECRET to an agent service's environment.
+services:
+  wallet:
+    build:
+      context: ..
+      dockerfile: deploy/Dockerfile
+    user: "walletmcp"
+    read_only: true
+    tmpfs:
+      - /tmp
+    environment:
+      WALLET_MCP_MODE: agent
+      WALLET_MCP_DATA_DIR: /var/lib/wallet-mcp
+    volumes:
+      - wallet-data:/var/lib/wallet-mcp
+    secrets:
+      - approval_secret
+      - passphrase
+
+secrets:
+  approval_secret:
+    file: ./secrets/approval_secret
+  passphrase:
+    file: ./secrets/passphrase
+
+volumes:
+  wallet-data:
