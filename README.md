@@ -224,7 +224,7 @@ A file that raises a ceiling without a valid HMAC is rejected at startup. Loweri
 
 ## Security model
 
-The review notes for an external audit are in [SECURITY.md](SECURITY.md). Short version:
+The review notes for an external audit are in [SECURITY.md](SECURITY.md). A code review from 16 October 2026 is written up in [docs/security/AUDIT-2026-10-16.md](docs/security/AUDIT-2026-10-16.md). It is not a substitute for an independent professional audit. Do not treat a green CI run as one.
 
 **Assets:** cold seeds (owner machine only), hot seeds, the funds on the hot wallets, token balances on those hot keys, the approval secret.
 
@@ -232,14 +232,15 @@ The server process should run as its **own OS user** (or its own machine or cont
 
 | Threat | What holds | What remains |
 |---|---|---|
-| Agent (or prompt injection) tries to pay by itself | `send_payment` needs a per-payment HMAC. Limits are checked again immediately before sign. Five bad codes lock the coin | A human who approves without reading the address and amount |
-| Agent tries to spend the cold wallet | Cold tools are watch-only. `execute` refuses a non-hot wallet. Agent mode will not boot if a cold seed file is on disk. `hw-sign` is not an MCP tool and refuses agent mode before it talks to a device | Owner copies `owner-cold/` onto the agent host and ignores the warning, or confirms a hardware prompt they did not read |
-| Agent raises its own limit | Increases need `approve-limit` and an HMAC stored next to the ceiling. The configure UI cannot complete an increase | Same OS user as the server, so the agent can read the secret |
+| Agent (or prompt injection) tries to pay by itself | `send_payment` needs a per-payment HMAC. The spend is reserved under a file lock before broadcast. Five bad codes lock the coin. Addresses and memos on the approval screen cannot contain control characters or bidi marks | A human who approves without reading the address and amount. A failed broadcast still counts against the daily limit |
+| Agent tries to spend the cold wallet | Cold tools are watch-only. `execute` refuses a non-hot wallet. Agent mode will not boot if a cold seed file is on disk. A Bitcoin WIF or secret descriptor is rejected as a watch-only import. `hw-sign` is not an MCP tool and refuses agent mode before it talks to a device | Owner copies `owner-cold/` onto the agent host and ignores the warning, or confirms a hardware prompt they did not read |
+| Agent raises its own limit | Increases need `approve-limit` and an HMAC stored next to the ceiling. The configure UI cannot complete an increase. A limit request expires after 24 hours | Same OS user as the server, so the agent can read the secret |
 | Agent calls a coin that was not selected | That adapter is not registered. The tool name does not exist | – |
 | Tampered unsigned payload | The adapter re-checks address, amount, and fee against the approved payment before sign | A bug in a new adapter; keep the "do not override `execute`" test |
-| Hostile chain API | Can lie about balances and fees. Cannot redirect a signed payment: outputs are checked locally, and fees above the cap are refused | Privacy. Run your own node |
-| Accidental mainnet | Disabled until `WALLET_MCP_<COIN>_ALLOW_MAINNET=I_UNDERSTAND_REAL_MONEY` | – |
-| Stolen disk | scrypt (N=2^17) + AES-256-GCM | A weak passphrase |
+| Agent rewrites the spend ledger | The ledger and pending state are HMAC-sealed with the approval secret. A bad MAC fails closed | Deleting the ledger file starts a fresh 24-hour window. Someone who can delete it can usually read the secret too |
+| Hostile chain API | Can lie about balances and fees. Cannot redirect a signed payment: outputs are checked locally, and fees above the cap are refused. Chain URLs must be https (http only on localhost), and redirects are refused | Privacy. Run your own node. An https URL on a private network is still allowed for a self-hosted node |
+| Accidental mainnet | Disabled until `WALLET_MCP_<COIN>_ALLOW_MAINNET=I_UNDERSTAND_REAL_MONEY`. Mainnet chain URLs must be https | – |
+| Stolen disk | scrypt (N=2^17, bounded) + AES-256-GCM. New files bind the ciphertext to the coin and role | A weak passphrase. Files written before that binding still use the shared tag |
 
 Out of scope: Lightning, multisig, RBF/CPFP, coin control. Hardware signing is owner-side only (Ledger or Trezor); the agent cannot start it, and this server does not broadcast the result.
 

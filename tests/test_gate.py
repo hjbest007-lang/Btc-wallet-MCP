@@ -63,6 +63,7 @@ def build(tmp_path, coins=("btc",), limits=None):
         policies[coin] = Policy(
             coin, network, "sat" if coin == "btc" else "wei", tmp_path / coin,
             lambda mx=max_tx, md=max_day: (mx, md, frozenset()), now=clock,
+            secret_provider=lambda: SECRET,
         )
     gate = PaymentGate(adapters, policies, spies, lambda: SECRET, {coin: 600 for coin in coins})
     gate.clock = clock
@@ -162,3 +163,58 @@ def test_authorization_cannot_be_forged():
 @pytest.mark.parametrize("amount", [0, -5, True, "100"])
 def test_bad_amounts(tmp_path, amount):
     assert not build(tmp_path).prepare_payment("btc", ADDR, amount)["ok"]
+
+
+def test_memo_and_address_cannot_rewrite_the_approval_screen(tmp_path):
+    gate = build(tmp_path)
+    assert "unsupported" in gate.prepare_payment("btc", ADDR, 100, "ok\nTo: other")["error"]
+    assert "unsupported" in gate.prepare_payment("btc", ADDR, 100, "hide\x1b[2A")["error"]
+    assert "invalid address" in gate.prepare_payment("btc", ADDR[:6] + "\n" + ADDR[6:], 100)["error"]
+    assert "invalid address" in gate.prepare_payment("btc", "tb1q" + "\u202e" + "abc", 100)["error"]
+
+
+def test_concurrent_sends_cannot_pass_the_daily_limit(tmp_path):
+    import threading
+    gate = build(tmp_path)
+    first = gate.prepare_payment("btc", ADDR, 8000)
+    second = gate.prepare_payment("btc", ADDR, 8000)
+    assert first["ok"] and second["ok"]
+    barrier = threading.Barrier(2)
+    results = []
+
+    def send(body):
+        barrier.wait(timeout=5)
+        results.append(gate.send_payment("btc", body["confirm_id"], code(gate, "btc", body)))
+
+    threads = [threading.Thread(target=send, args=(body,)) for body in (first, second)]
+    for thread in threads:
+        thread.start()
+    for thread in threads:
+        thread.join()
+    assert sorted(item["ok"] for item in results) == [False, True]
+    assert len(gate.spies["btc"].calls) == 1
+    assert "daily" in next(item["error"] for item in results if not item["ok"])
+
+
+def test_tampered_ledger_fails_closed(tmp_path):
+    import json
+    from wallet_mcp.policy import PolicyError
+    gate = build(tmp_path)
+    prepared = gate.prepare_payment("btc", ADDR, 1000)
+    assert gate.send_payment("btc", prepared["confirm_id"], code(gate, "btc", prepared))["ok"]
+    ledger_path = tmp_path / "btc" / "ledger.json"
+    blob = json.loads(ledger_path.read_text())
+    blob["entries"][0]["total"] = 0
+    ledger_path.write_text(json.dumps(blob))
+    with pytest.raises(PolicyError, match="integrity"):
+        gate.policies["btc"].spent_last_24h()
+
+
+def test_unicode_approval_code_counts_as_a_failure(tmp_path):
+    import json
+    gate = build(tmp_path)
+    prepared = gate.prepare_payment("btc", ADDR, 100)
+    refused = gate.send_payment("btc", prepared["confirm_id"], "é" * 12)
+    assert "invalid" in refused["error"]
+    state = json.loads((tmp_path / "btc" / "pending.json").read_text())
+    assert state["failed"] == 1

@@ -1,8 +1,12 @@
 # Security
 
-wallet-mcp is experimental and has not had an independent audit. Read
-[DISCLAIMER.md](DISCLAIMER.md) before using it. Do not put mainnet funds you
-cannot lose in a hot wallet. The cold seed stays on the owner's machine.
+wallet-mcp is experimental and has not had an independent professional audit.
+A repository review from 16 October 2026 is in
+[docs/security/AUDIT-2026-10-16.md](docs/security/AUDIT-2026-10-16.md)
+(also linked from [AUDIT.md](AUDIT.md)). That review is not a substitute for
+an independent professional audit. Read [DISCLAIMER.md](DISCLAIMER.md) before
+using it. Do not put mainnet funds you cannot lose in a hot wallet. The cold
+seed stays on the owner's machine.
 
 This document is the threat model an external reviewer should start from. It
 describes what the software is trying to hold, and what it is not.
@@ -49,7 +53,7 @@ These are the invariants a review should try to break:
 - `SpendAuthorization` can be constructed only with the seal object in `gate.py`, and only for `role=hot`.
 - The approval HMAC covers coin, network, role, confirm id, address, amount, and fee. An XRP destination tag is appended as `|tag:<n>`. Token gas is appended as `|gas:<wei>`. A code that omits the suffix does not match.
 - A code is single-use. Five bad codes lock that coin until `wallet-mcp unlock`.
-- Limits are checked again immediately before sign. A token payment's gas is also checked against the parent coin (ETH or AVAX) and then recorded on that coin's ledger.
+- Limits are checked again immediately before sign. The spend is reserved under a file lock before broadcast, so two approvals cannot both pass the same residual daily budget. A token payment's gas is reserved on the parent coin (ETH or AVAX) before broadcast as well. The ledger and the lockout counter are HMAC-sealed with the approval secret when one is configured.
 - Raising a limit requires `approve-limit` and a stored HMAC. The configure UI and the localhost page cannot complete an increase. They never ask for the approval secret.
 - Known XRP exchange deposit addresses, `RequireDestTag` accounts, and `WALLET_MCP_XRP_TAG_REQUIRED` cannot be prepared without a destination tag. `sign` rejects a tag that differs from the approved one.
 - A cold adapter's `sign` raises `cold watch-only wallet cannot sign`.
@@ -62,18 +66,18 @@ These are the invariants a review should try to break:
 
 | Threat | What holds | What remains |
 |---|---|---|
-| Agent pays by itself, or via prompt injection | `send_payment` needs a per-payment HMAC. Limits are checked again before sign. Five bad codes lock the coin | A human who approves a payment they did not read |
-| Agent spends the cold wallet | Cold tools are watch-only. `execute` refuses a non-hot role. Agent mode will not boot if a cold seed is on disk. `hw-sign` is not a tool and refuses agent mode | Owner copies `owner-cold/` onto the agent host, or confirms a hardware prompt they did not read |
+| Agent pays by itself, or via prompt injection | `send_payment` needs a per-payment HMAC. The spend is reserved under a file lock before broadcast. Five bad codes lock the coin. Addresses and memos cannot contain control characters or bidi marks | A human who approves a payment they did not read. A failed broadcast still counts against the daily limit. Deleting the ledger file starts a fresh window |
+| Agent spends the cold wallet | Cold tools are watch-only. `execute` refuses a non-hot role. Agent mode will not boot if a cold seed is on disk. A Bitcoin WIF or secret descriptor is rejected as a watch-only import. `hw-sign` is not a tool and refuses agent mode | Owner copies `owner-cold/` onto the agent host, or confirms a hardware prompt they did not read |
 | Agent raises its own limit or turns on a coin that was not selected | Increases need `approve-limit`. Disabled coins are not registered as tools | Same OS user as the server, so the agent can read the secret and the config |
 | Tampered unsigned payload (PSBT, EVM tx, ERC-20 calldata, XRP payment, Solana transfer) | The adapter re-checks destination, amount, fee, and any bound tag or gas before sign | A bug in a new adapter. Keep the "do not override `execute`" test |
 | Missing XRP destination tag to an exchange | Prepare refuses known exchange addresses and `RequireDestTag` accounts | An exchange address that is not in the built-in list and has not set the flag. Add it with `WALLET_MCP_XRP_TAG_REQUIRED` |
 | Token transfer that hides a large gas bill | Gas is inside the HMAC and inside the parent coin's daily limit | Parent coin not enabled: the token cannot be enabled without it |
 | Agent triggers a Ledger or Trezor | No MCP tool. Agent mode returns before the device is opened. A device that does not report a button press produces no signature | A physically present owner who confirms the wrong prompt |
-| Hostile chain API | Can lie about balances and fees. Fees above `max_fee_rate` are refused. Outputs are checked locally | Privacy, and a fee quote inside the cap. Run your own node |
+| Hostile chain API | Can lie about balances and fees. Fees above `max_fee_rate` are refused. Outputs are checked locally. Chain URLs must be https (http only on localhost), and redirects are refused | Privacy, and a fee quote inside the cap. Run your own node. An https URL on a private network is still allowed for a self-hosted node |
 | Webhook or log used to steal the secret | Neither channel is given the secret or the code. A bad webhook cannot approve a payment | The log file if the server user is compromised. It still has no secret |
 | Accidental mainnet | Disabled until that coin's opt-in flag is set. Enabling mainnet prints a warning | The owner sets the flag and deposits more than they meant to |
-| Stolen disk | scrypt (N=2^17) + AES-256-GCM on hot seeds | A weak passphrase |
-| Supply chain | Dependencies are pinned loosely on purpose (`bdkpython` is pinned). A review should re-check `eth-account`, `xrpl-py`, `embit`, `solders`, `cryptography`, and `mcp` | A compromised build of one of those |
+| Stolen disk | scrypt (N=2^17, bounded) + AES-256-GCM on hot seeds. New files bind the ciphertext to the coin and role | A weak passphrase. Files written before that binding still use the shared tag |
+| Supply chain | Actions are pinned to commit SHAs. CI runs semgrep, bandit, ruff, pip-audit, and gitleaks. Python dependencies stay version ranges (`bdkpython` is pinned). A review should re-check `eth-account`, `xrpl-py`, `embit`, `solders`, `cryptography`, and `mcp` | A compromised build of one of those. There are no signed releases |
 
 ## Review guide
 

@@ -146,6 +146,16 @@ def make_httpd(env=None, port: int = 8765) -> ThreadingHTTPServer:
             if length > MAX_BODY:
                 self._send(413, "request too large")
                 return
+            bound_port = self.server.server_address[1]
+            allowed = {f"127.0.0.1:{bound_port}", f"localhost:{bound_port}"}
+            host = self.headers.get("Host")
+            origin = self.headers.get("Origin")
+            if host and host not in allowed:
+                self._send(403, "bad host")
+                return
+            if origin and origin not in {f"http://{item}" for item in allowed}:
+                self._send(403, "bad origin")
+                return
             raw = self.rfile.read(length).decode()
             fields = parse_qs(raw, keep_blank_values=True)
             given = _field(fields, "csrf")
@@ -170,6 +180,13 @@ def make_httpd(env=None, port: int = 8765) -> ThreadingHTTPServer:
             self.send_response(status)
             self.send_header("Content-Type", content_type)
             self.send_header("Content-Length", str(len(data)))
+            self.send_header("X-Content-Type-Options", "nosniff")
+            self.send_header("Referrer-Policy", "no-referrer")
+            self.send_header("Cache-Control", "no-store")
+            self.send_header(
+                "Content-Security-Policy",
+                "default-src 'none'; style-src 'unsafe-inline'; form-action 'self'; base-uri 'none'",
+            )
             self.end_headers()
             self.wfile.write(data)
 

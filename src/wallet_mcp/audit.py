@@ -11,9 +11,10 @@ import json
 import logging
 import os
 import time
-import urllib.request
 from pathlib import Path
 from urllib.parse import urlparse
+
+from btc_wallet_mcp.guard import open_chain
 
 log = logging.getLogger("wallet_mcp")
 
@@ -57,10 +58,9 @@ def _allowed(url: str) -> bool:
 
 def _post(url: str, payload: dict) -> None:
     data = json.dumps(payload).encode()
-    request = urllib.request.Request(
-        url, data=data, headers={"Content-Type": "application/json"}, method="POST",
-    )
-    with urllib.request.urlopen(request, timeout=3) as response:
+    with open_chain(
+        url, data=data, headers={"Content-Type": "application/json"}, timeout=3,
+    ) as response:
         response.read()
 
 

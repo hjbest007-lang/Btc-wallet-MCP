@@ -5,6 +5,8 @@ import os
 from dataclasses import dataclass, field
 from pathlib import Path
 
+from .guard import GuardError, validate_chain_url
+
 MAINNET_OPT_IN = "I_UNDERSTAND_REAL_MONEY"
 
 DEFAULT_ESPLORA = {
@@ -62,8 +64,10 @@ def load_config(env=None) -> Config:
             "mainnet requires BTC_WALLET_ALLOW_MAINNET=" + MAINNET_OPT_IN
         )
     url = env.get("BTC_WALLET_ESPLORA_URL") or DEFAULT_ESPLORA[network]
-    if network == "bitcoin" and not url.startswith("https://"):
-        raise ConfigError("mainnet Esplora URL must use https")
+    try:
+        url = validate_chain_url(url, mainnet=(network == "bitcoin"))
+    except GuardError as exc:
+        raise ConfigError(str(exc)) from exc
     base = Path(env.get("BTC_WALLET_DATA_DIR") or Path.home() / ".btc-wallet-mcp")
     allow = frozenset(
         a.strip() for a in env.get("BTC_WALLET_ALLOWLIST", "").split(",") if a.strip()

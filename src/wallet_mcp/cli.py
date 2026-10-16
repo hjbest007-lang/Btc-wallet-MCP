@@ -10,6 +10,7 @@ import getpass
 import json
 import sys
 
+from btc_wallet_mcp.guard import sanitize_terminal
 from btc_wallet_mcp.keystore import read_seed_file, write_seed_file
 
 from .audit import AuditLog
@@ -109,11 +110,11 @@ def cmd_init(cfg, args) -> None:
     secret = new_secret(args.coin)
     if args.role == "hot":
         path = cfg.hot_dir(args.coin) / "seed.enc"
-        write_seed_file(path, secret, passphrase)
+        write_seed_file(path, secret, passphrase, context=f"{args.coin}:{args.role}")
         print(f"Hot {coin.spec.name} wallet created for {coin.network} in {path.parent}")
     else:
         path = cfg.coin_root(args.coin) / "owner-cold" / "seed.enc"
-        write_seed_file(path, secret, passphrase)
+        write_seed_file(path, secret, passphrase, context=f"{args.coin}:{args.role}")
         document = watch_document(args.coin, coin.network, secret)
         export_path = cfg.coin_root(args.coin) / "cold-export.json"
         atomic_json(export_path, document)
@@ -150,10 +151,13 @@ def _validate_import(coin_id: str, network: str, document: dict) -> None:
     if coin_id == "btc":
         if document.get("kind") != "bdk-descriptor":
             raise ConfigError("btc watch file must have kind bdk-descriptor")
-        import bdkpython as bdk
-        from btc_wallet_mcp.wallet import NETWORKS
-        bdk.Descriptor(document["external"], NETWORKS[network])
-        bdk.Descriptor(document["internal"], NETWORKS[network])
+        from .adapters.base import AdapterError
+        from .adapters.bitcoin import assert_public_descriptor
+        try:
+            assert_public_descriptor(document["external"], network)
+            assert_public_descriptor(document["internal"], network)
+        except AdapterError as exc:
+            raise ConfigError(str(exc)) from None
     elif coin_id in {"eth", "avax", "usdc_eth", "usdt_eth", "usdc_avax", "usdt_avax"}:
         if document.get("kind") != "address":
             raise ConfigError(f"{coin_id} watch file must have kind address")
@@ -230,9 +234,9 @@ def cmd_approve(cfg, args) -> None:
         tag_line = f"Gas     : {pending.extra.split(':', 1)[1]} (native, bound into the code)\n"
     print(
         f"Coin    : {pending.coin}\nNetwork : {pending.network}\nRole    : {pending.role}\n"
-        f"To      : {pending.address}\n{tag_line}"
+        f"To      : {sanitize_terminal(pending.address)}\n{tag_line}"
         f"Amount  : {format_amount(pending.coin, pending.amount)}\n"
-        f"Fee     : {format_amount(pending.coin, pending.fee)}\nMemo    : {pending.memo}"
+        f"Fee     : {format_amount(pending.coin, pending.fee)}\nMemo    : {sanitize_terminal(pending.memo)}"
     )
     audit = AuditLog(cfg.data_dir / "audit.log")
     if input("Approve exactly this hot-wallet payment? type 'yes': ").strip() != "yes":
@@ -303,7 +307,7 @@ def cmd_backup(cfg, args) -> None:
         path = cfg.hot_dir(args.coin) / "seed.enc"
     else:
         path = cfg.coin_root(args.coin) / "owner-cold" / "seed.enc"
-    print(read_seed_file(path, _passphrase(cfg.env)))
+        print(read_seed_file(path, _passphrase(cfg.env), context=f"{args.coin}:{args.role}"))
 
 
 def main(argv=None) -> None:

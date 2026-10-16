@@ -20,6 +20,7 @@ from .policy import LimitRequest, PolicyError, limit_approval_code, limits_mac
 from .util import atomic_json, ensure_dir
 
 LIMIT_REQUESTS = "limit-requests.json"
+LIMIT_TTL = 86_400
 
 
 class ConfigError(Exception):
@@ -166,10 +167,8 @@ def _verify_limits(coin_id: str, slot: dict, secret: str | None) -> None:
 
 
 def hmac_equal(expected: str, given: str) -> bool:
-    import hmac
-    if len(expected) != len(given):
-        return False
-    return hmac.compare_digest(expected, given)
+    from btc_wallet_mcp.guard import constant_time_equals
+    return constant_time_equals(expected, (given or "").strip().lower())
 
 
 def load_config(env=None, *, require_mainnet_flag: bool = True) -> AppConfig:
@@ -306,11 +305,14 @@ def _write_limit_request(cfg: AppConfig, request: LimitRequest) -> None:
     atomic_json(_requests_path(cfg), blob)
 
 
-def get_limit_request(cfg: AppConfig, request_id: str) -> LimitRequest:
+def get_limit_request(cfg: AppConfig, request_id: str, now=time.time) -> LimitRequest:
     blob = _read_requests(cfg)
     if request_id not in blob:
         raise ConfigError("unknown limit request")
-    return LimitRequest(**blob[request_id])
+    request = LimitRequest(**blob[request_id])
+    if now() - request.created > LIMIT_TTL:
+        raise ConfigError("limit request expired")
+    return request
 
 
 def approve_limits(cfg: AppConfig, request_id: str, code: str, secret: str | None) -> LimitRequest:

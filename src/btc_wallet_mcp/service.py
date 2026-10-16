@@ -5,11 +5,11 @@ import logging
 import os
 
 from .config import Config
+from .guard import GuardError, assert_safe_memo
 from .policy import Policy, PolicyError
 from .wallet import WalletError
 
 log = logging.getLogger("btc_wallet_mcp")
-MAX_MEMO = 140
 
 
 class Service:
@@ -17,6 +17,7 @@ class Service:
         self.cfg, self.wallet = cfg, wallet
         self.policy = policy or Policy(cfg)
         self._env = os.environ if env is None else env
+        self.policy.secret_provider = self._secret
 
     def _secret(self):
         # Read at call time; never returned or logged.
@@ -44,15 +45,14 @@ class Service:
 
     def prepare_payment(self, address: str, amount_sats: int, memo: str = "") -> dict:
         try:
-            address = address.strip()
-            memo = (memo or "")[:MAX_MEMO]
-            self.policy.check_request(address, amount_sats)
+            memo = assert_safe_memo(memo or "")
+            address = self.policy.check_request(address, amount_sats)
             self.wallet.sync()
             rate = self.wallet.fee_rate()
             psbt, fee = self.wallet.build(address, amount_sats, rate)
             self.policy.check_total(amount_sats, fee)
             p = self.policy.add_pending(address, amount_sats, fee, memo, psbt)
-        except (PolicyError, WalletError) as e:
+        except (PolicyError, WalletError, GuardError) as e:
             return {"ok": False, "error": str(e)}
         except Exception as e:  # BDK errors, e.g. insufficient funds
             log.warning("prepare failed: %s", type(e).__name__)
@@ -67,12 +67,12 @@ class Service:
 
     def send_payment(self, confirm_id: str, approval_code: str) -> dict:
         try:
-            p = self.policy.get_pending(confirm_id)
-            self.policy.verify_approval(p, approval_code, self._secret())
-            self.policy.check_total(p.amount_sats, p.fee_sats)  # re-check daily limit now
-            self.policy.discard(p.confirm_id)  # single use, even if broadcast fails
+            p = self.policy.authorize_and_reserve(confirm_id, approval_code, self._secret())
             txid = self.wallet.sign_and_broadcast(p.psbt, p.address, p.amount_sats, p.fee_sats)
-            self.policy.consume(p, txid)
+            try:
+                self.policy.attach_txid(p, txid)
+            except PolicyError:
+                log.warning("ledger update failed after broadcast")
         except (PolicyError, WalletError) as e:
             return {"ok": False, "error": str(e)}
         except Exception as e:

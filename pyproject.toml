@@ -6,7 +6,7 @@ license = {text = "MIT"}
 requires-python = ">=3.11"
 dependencies = [
     "bdkpython==2.2.0",
-    "mcp>=1.2,<2",
+    "mcp>=1.30,<2",
     "cryptography>=42",
     "eth-account>=0.13,<1",
     "xrpl-py>=4,<6",
@@ -32,3 +32,22 @@ where = ["src"]
 markers = [
     "integration: public signet/testnet reads only (opt-in: BTC_WALLET_INTEGRATION=1 or WALLET_MCP_INTEGRATION=1). Never broadcasts.",
 ]
+
+[tool.ruff]
+line-length = 110
+src = ["src", "tests"]
+
+[tool.ruff.lint]
+select = ["S"]
+
+[tool.ruff.lint.per-file-ignores]
+# The chain client validates the URL and refuses redirects before opening it.
+"src/btc_wallet_mcp/guard.py" = ["S310"]
+# Pytest uses assert. The install dry-run test executes the repo's own script.
+"tests/**" = ["S101", "S105", "S106", "S310", "S603", "S607"]
+
+[tool.mypy]
+python_version = "3.11"
+files = ["src/btc_wallet_mcp/guard.py"]
+strict = true
+warn_unused_ignores = true

@@ -7,6 +7,7 @@ import os
 import sys
 
 from .config import load_config
+from .guard import sanitize_terminal
 from .keystore import read_seed_file, write_seed_file
 from .policy import Policy, approval_code
 from .wallet import new_mnemonic
@@ -44,7 +45,7 @@ def main(argv=None) -> None:
         _require_tty()
         pw = _passphrase(confirm=True)
         m = new_mnemonic()
-        write_seed_file(cfg.data_dir / "seed.enc", m, pw)
+        write_seed_file(cfg.data_dir / "seed.enc", m, pw, context="btc")
         print(f"Wallet created for {cfg.network} in {cfg.data_dir}")
         print("Write these 12 words on paper NOW (BIP39, BIP84 m/84'/x'/0'). Shown once:\n")
         print("   " + m + "\n")
@@ -53,7 +54,7 @@ def main(argv=None) -> None:
         return
     if args.cmd == "backup":
         _require_tty()
-        print(read_seed_file(cfg.data_dir / "seed.enc", _passphrase()))
+        print(read_seed_file(cfg.data_dir / "seed.enc", _passphrase(), context="btc"))
         return
     if args.cmd == "unlock":
         _require_tty()
@@ -63,8 +64,8 @@ def main(argv=None) -> None:
     if args.cmd == "approve":
         _require_tty()
         p = Policy(cfg).get_pending(args.confirm_id)
-        print(f"Network : {cfg.network}\nTo      : {p.address}\nAmount  : {p.amount_sats} sats"
-              f"\nFee     : {p.fee_sats} sats\nMemo    : {p.memo}")
+        print(f"Network : {cfg.network}\nTo      : {sanitize_terminal(p.address)}\nAmount  : {p.amount_sats} sats"
+              f"\nFee     : {p.fee_sats} sats\nMemo    : {sanitize_terminal(p.memo)}")
         if input("Approve exactly this payment? type 'yes': ").strip() != "yes":
             raise SystemExit("not approved")
         secret = os.environ.get("BTC_WALLET_APPROVAL_SECRET") or getpass.getpass("Approval secret: ")
