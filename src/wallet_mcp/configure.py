@@ -131,7 +131,8 @@ def client_refused(host: str | None, origin: str | None, port: int) -> str | Non
     """Return a refusal when Host or Origin is not this loopback listener.
 
     A missing header is allowed: non-browser clients omit Origin, and the
-    bind address is already 127.0.0.1. A present header must match.
+    bind address is already 127.0.0.1. A present header must match. The
+    literal value ``null`` does not match and is refused.
     """
     allowed = {f"127.0.0.1:{port}", f"localhost:{port}"}
     if host and host not in allowed:
@@ -198,7 +199,8 @@ def make_httpd(env=None, port: int = 8765) -> ThreadingHTTPServer:
             self.send_header("Content-Type", content_type)
             self.send_header("Content-Length", str(len(data)))
             self.send_header("X-Content-Type-Options", "nosniff")
-            self.send_header("Referrer-Policy", "no-referrer")
+            # same-origin: no-referrer makes Chrome and Edge send Origin: null on form POST.
+            self.send_header("Referrer-Policy", "same-origin")
             self.send_header("Cache-Control", "no-store")
             self.send_header(
                 "Content-Security-Policy",

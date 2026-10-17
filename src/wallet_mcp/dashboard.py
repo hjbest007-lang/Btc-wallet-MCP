@@ -764,7 +764,8 @@ def make_dashboard(env=None, port: int = 8770, runtime_factory=None, price_fetch
 
         def _headers(self):
             self.send_header("X-Content-Type-Options", "nosniff")
-            self.send_header("Referrer-Policy", "no-referrer")
+            # same-origin: no-referrer makes Chrome and Edge send Origin: null on form POST.
+            self.send_header("Referrer-Policy", "same-origin")
             self.send_header("Cache-Control", "no-store")
             self.send_header("X-Frame-Options", "DENY")
             self.send_header("Content-Security-Policy", _CSP)

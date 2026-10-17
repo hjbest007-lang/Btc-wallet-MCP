@@ -13,6 +13,7 @@ from wallet_mcp.adapters.base import ChainAdapter, PreparedTransfer
 from wallet_mcp.audit import AuditLog
 from wallet_mcp.cli import cmd_dashboard, main
 from wallet_mcp.config import apply_enabled, load_config, save_config
+from wallet_mcp.configure import make_httpd
 from wallet_mcp.dashboard import load_eur_prices, make_dashboard
 from wallet_mcp.gate import PaymentGate
 from wallet_mcp.policy import Policy, PolicyError, approval_code
@@ -162,11 +163,43 @@ def test_dashboard_binds_localhost_only(tmp_path):
         assert "Logboek" in page
         assert "experimentele, niet-geauditeerde software" in page
         assert headers["X-Content-Type-Options"] == "nosniff"
+        assert headers["Referrer-Policy"] == "same-origin"
         assert headers["Cache-Control"] == "no-store"
         assert "script-src 'unsafe-inline'" in headers["Content-Security-Policy"]
         assert "default-src 'none'" in headers["Content-Security-Policy"]
     finally:
         _stop(httpd)
+
+
+def test_referrer_policy_is_same_origin_and_null_origin_is_refused(tmp_path):
+    """no-referrer makes Chrome and Edge send Origin: null on same-origin form POST."""
+    env = env_of(tmp_path)
+    enable_btc(env)
+    dashboard = _serve(env)
+    configure = make_httpd(env, 0)
+    thread = threading.Thread(target=configure.serve_forever, daemon=True)
+    thread.start()
+    try:
+        for httpd in (dashboard, configure):
+            status, _page, headers = _get(httpd)
+            assert status == 200
+            assert headers["Referrer-Policy"] == "same-origin"
+            port = httpd.server_address[1]
+            origin = f"http://127.0.0.1:{port}"
+            status, payload, _hdrs = _raw(
+                httpd, "POST", b"csrf=nope",
+                {"Origin": origin, "Content-Type": "application/x-www-form-urlencoded"},
+            )
+            assert status == 403 and payload == "bad csrf token"
+            status, payload, _hdrs = _raw(
+                httpd, "POST", b"csrf=nope",
+                {"Origin": "null", "Content-Type": "application/x-www-form-urlencoded"},
+            )
+            assert status == 403 and payload == "bad origin"
+    finally:
+        _stop(dashboard)
+        configure.shutdown()
+        configure.server_close()
 
 
 def test_dashboard_rejects_bad_host_and_origin(tmp_path):
