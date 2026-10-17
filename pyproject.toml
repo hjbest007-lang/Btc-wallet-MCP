@@ -16,10 +16,14 @@ dependencies = [
 
 [project.optional-dependencies]
 test = ["pytest>=8"]
+dev = ["pyinstaller>=6"]
 
 [project.scripts]
 btc-wallet-mcp = "btc_wallet_mcp.cli:main"
 wallet-mcp = "wallet_mcp.cli:main"
+# Console script so a double-click keeps a visible window. A gui-script would
+# start pythonw and hide that window.
+wallet-beheer = "wallet_mcp.launch:main"
 
 [build-system]
 requires = ["setuptools>=68"]
