@@ -25,7 +25,7 @@ The original Bitcoin-only command, `btc-wallet-mcp`, is still there and behaves 
 
 ## Vision
 
-The agent earns and pays for services on the owner's behalf. It spends from a **hot** key with a low per-payment limit and a low daily limit. The owner tops that key up from a **cold** wallet that never lives on the agent's machine. Amounts above the limit, and any increase of the limit or of the autonomous budget, need a human yes that the agent cannot produce. See [ROADMAP.md](ROADMAP.md). The budget is an integer in the coin's base unit. There is no price oracle.
+The agent earns and pays for services on the owner's behalf. It spends from a **hot** key with a low per-payment limit and a low daily limit. The owner tops that key up from a **cold** wallet that never lives on the agent's machine. Amounts above the limit, and any increase of the limit or of the autonomous budget, need a human yes that the agent cannot produce. See [ROADMAP.md](ROADMAP.md). The budget is an integer in the coin's base unit. There is no price oracle. The owner dashboard can show an optional EUR estimate; that figure is not used to set or check the budget.
 
 ## Cold and hot, per coin
 
@@ -99,9 +99,32 @@ wallet-mcp configure --web
 # http://127.0.0.1:8765/
 ```
 
-De pagina en het menu schrijven `config.json`. Ze kunnen een limiet **verlagen**. Een verhoging wordt een verzoek; die gaat pas in nadat jij in een terminal `wallet-mcp approve-limit <id>` doet. De pagina vraagt nooit om het approval-secret.
+De pagina en het menu schrijven `config.json`. Ze kunnen een limiet **verlagen**. Een verhoging wordt een verzoek; die gaat pas in nadat jij in een terminal `wallet-mcp approve-limit <id>` doet. De configure-pagina vraagt nooit om het approval-secret.
 
 Daarna de server herstarten. `list_coins` toont wat er echt geladen is.
+
+## Wallet-beheer
+
+Eigenaar-dashboard op deze computer. Alleen `127.0.0.1`, geen andere interface. `WALLET_MCP_MODE=agent` weigert te starten. De pagina toont geen seed en maakt geen seed aan; `init` en `backup` blijven in de terminal.
+
+```bash
+wallet-mcp dashboard --port 8770
+# http://127.0.0.1:8770/
+```
+
+Op Windows, in `cmd.exe`:
+
+```bat
+wallet-mcp dashboard --port 8770
+```
+
+Open daarna `http://127.0.0.1:8770/` in een browser op dezelfde pc. Gebruik niet het LAN-adres. Op Windows wijst de naam `localhost` soms naar IPv6; het programma luistert alleen op `127.0.0.1`. Staat `wallet-mcp` niet op `PATH`, gebruik `.\.venv\Scripts\wallet-mcp.exe dashboard --port 8770`.
+
+De pagina volgt dezelfde controles als `configure --web`: Host- en Origin-check, een CSRF-token per proces, security-headers, en geen assets van een CDN. Verlagen van `max_per_tx`, `max_per_day`, `auto_max_per_tx` of `auto_max_per_day` gaat meteen in. Verhogen loopt via `request-limit` / `approve-limit` en `request-auto` / `approve-auto`. Je typt het approval-secret in het wachtwoordveld op de pagina. Dat geheim wordt niet opgeslagen, niet gelogd en niet in een antwoord gezet. De vergelijking is de bestaande HMAC.
+
+Een betaling in **Wacht op jouw goedkeuring** keur je daar goed (zelfde HMAC, daarna de bestaande `send_payment`) of wijs je af. Het **logboek** leest `audit.log` en onderscheidt een autonome betaling van een betaling die jij goedkeurde.
+
+De euroschatting staat uit tot je **Toon schatting in euro** kiest. De koers komt alleen via https. Mislukt dat, dan zie je `–`. Limieten en het autonome budget blijven basiseenheden.
 
 ## Tools
 
@@ -222,13 +245,13 @@ Default hot limits (base units, amount **plus** fee):
 | usdc / usdt | 10 tokens | 50 tokens | parent-chain gas cap (also counted on eth or avax) |
 | sol | 0.01 SOL | 0.05 SOL | 100 000 lamports |
 
-A file that raises a ceiling without a valid HMAC is rejected at startup. Lowering a limit does not need the secret. The web UI cannot raise one.
+A file that raises a ceiling without a valid HMAC is rejected at startup. Lowering a limit does not need the secret. The configure page cannot raise one. The owner dashboard can, after you type the approval secret.
 
 ### Autonomous budget
 
 Per coin, `auto_max_per_tx` and `auto_max_per_day` are integers in that coin's **base unit** (sat, wei, drop, litoshi, token base unit, lamport). The default is `0` / `0`, which turns the feature off. There is no price feed: 10 000 sats stays 10 000 sats if the market moves.
 
-Both numbers must be less than or equal to `max_per_tx` and `max_per_day`. A non-zero pair is sealed with `auto_mac`, an HMAC of the approval secret, the coin, and those two numbers (the same idea as `limits_mac`). A file whose numbers do not match `auto_mac` is rejected at startup and the next spend fails closed. The MCP server has no tool that writes these fields. The configure page cannot write them either.
+Both numbers must be less than or equal to `max_per_tx` and `max_per_day`. A non-zero pair is sealed with `auto_mac`, an HMAC of the approval secret, the coin, and those two numbers (the same idea as `limits_mac`). A file whose numbers do not match `auto_mac` is rejected at startup and the next spend fails closed. The MCP server has no tool that writes these fields. The configure page cannot write them either. The owner dashboard can lower them immediately and can raise them only by typing the approval secret, which goes through `approve-auto`.
 
 A hot payment whose amount **plus fee** fits `auto_max_per_tx` and the remaining `auto_max_per_day` is reserved on the sealed ledger under the same file lock as a normal send, then broadcast from `prepare_payment`. No approval code is required. The row is marked `auto` and still counts toward `max_per_day`. The audit log records `"auto": true`. The webhook fires as `auto_spent` (a notification). Allowlist, fee cap, mainnet opt-in, and address/memo checks still apply. A cold wallet never takes this path. A token payment also has to fit the parent coin's autonomous budget, because the gas is native currency.
 
@@ -258,7 +281,7 @@ The server process should run as its **own OS user** (or its own machine or cont
 |---|---|---|
 | Agent (or prompt injection) tries to pay by itself | Above the autonomous budget, `send_payment` needs a per-payment HMAC. Inside it, prepare reserves the spend under a file lock before broadcast and the total cannot pass `auto_max_per_tx` / `auto_max_per_day`. Five bad codes lock the coin. Addresses and memos cannot contain control characters or bidi marks. Cold wallets never auto-spend | The owner granted a budget larger than they meant. A human who approves a payment they did not read. A failed broadcast still counts against the daily limit and the auto budget |
 | Agent tries to spend the cold wallet | Cold tools are watch-only. `execute` refuses a non-hot wallet. Agent mode will not boot if a cold seed file is on disk. A Bitcoin WIF or secret descriptor is rejected as a watch-only import. `hw-sign` is not an MCP tool and refuses agent mode before it talks to a device | Owner copies `owner-cold/` onto the agent host and ignores the warning, or confirms a hardware prompt they did not read |
-| Agent raises its own limit or its autonomous budget | Limit increases need `approve-limit` and `limits_mac`. Budget increases need `request-auto` plus TTY `approve-auto` and `auto_mac`. The configure UI and the MCP tools cannot complete either increase. A request expires after 24 hours. A tampered `auto_mac` fails closed | Same OS user as the server, so the agent can read the secret and forge a MAC. Replacing `config.json` with an older file the owner had approved restores that older budget |
+| Agent raises its own limit or its autonomous budget | Limit increases need `approve-limit` and `limits_mac`. Budget increases need `request-auto` plus `approve-auto` and `auto_mac`. The configure UI and the MCP tools cannot complete either increase. The owner dashboard can, only after the owner types the approval secret, and it refuses `WALLET_MCP_MODE=agent`. A request expires after 24 hours. A tampered `auto_mac` fails closed | Same OS user as the server, so the agent can read the secret and forge a MAC. Replacing `config.json` with an older file the owner had approved restores that older budget. A process on the same machine can open the dashboard if the owner started it |
 | Agent calls a coin that was not selected | That adapter is not registered. The tool name does not exist | – |
 | Tampered unsigned payload | The adapter re-checks address, amount, and fee against the approved payment before sign | A bug in a new adapter; keep the "do not override `execute`" test |
 | Agent rewrites the spend ledger | The ledger and pending state are HMAC-sealed with the approval secret. A bad MAC fails closed | Deleting the ledger file starts a fresh 24-hour window. Someone who can delete it can usually read the secret too |

@@ -127,6 +127,27 @@ def _field(fields: dict, name: str) -> str:
     return values[0].strip() if values else ""
 
 
+def client_refused(host: str | None, origin: str | None, port: int) -> str | None:
+    """Return a refusal when Host or Origin is not this loopback listener.
+
+    A missing header is allowed: non-browser clients omit Origin, and the
+    bind address is already 127.0.0.1. A present header must match.
+    """
+    allowed = {f"127.0.0.1:{port}", f"localhost:{port}"}
+    if host and host not in allowed:
+        return "bad host"
+    if origin and origin not in {f"http://{item}" for item in allowed}:
+        return "bad origin"
+    return None
+
+
+def csrf_matches(given: str, token: str) -> bool:
+    import hmac
+    if len(given) != len(token):
+        return False
+    return hmac.compare_digest(given, token)
+
+
 def make_httpd(env=None, port: int = 8765) -> ThreadingHTTPServer:
     import secrets
     token = secrets.token_hex(16)
@@ -150,20 +171,13 @@ def make_httpd(env=None, port: int = 8765) -> ThreadingHTTPServer:
                 self._send(413, "request too large")
                 return
             bound_port = self.server.server_address[1]
-            allowed = {f"127.0.0.1:{bound_port}", f"localhost:{bound_port}"}
-            host = self.headers.get("Host")
-            origin = self.headers.get("Origin")
-            if host and host not in allowed:
-                self._send(403, "bad host")
-                return
-            if origin and origin not in {f"http://{item}" for item in allowed}:
-                self._send(403, "bad origin")
+            reason = client_refused(self.headers.get("Host"), self.headers.get("Origin"), bound_port)
+            if reason:
+                self._send(403, reason)
                 return
             raw = self.rfile.read(length).decode()
             fields = parse_qs(raw, keep_blank_values=True)
-            given = _field(fields, "csrf")
-            import hmac
-            if len(given) != len(token) or not hmac.compare_digest(given, token):
+            if not csrf_matches(_field(fields, "csrf"), token):
                 self._send(403, "bad csrf token")
                 return
             try:
