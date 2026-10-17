@@ -126,6 +126,46 @@ Een betaling in **Wacht op jouw goedkeuring** keur je daar goed (zelfde HMAC, da
 
 De euroschatting staat uit tot je **Toon schatting in euro** kiest. De koers komt alleen via https. Mislukt dat, dan zie je `–`. Limieten en het autonome budget blijven basiseenheden.
 
+Op Windows kun je dit met één klik starten: [Wallet-beheer starten met één klik](#wallet-beheer-starten-met-één-klik).
+
+## Wallet-beheer starten met één klik
+
+Op Windows opent een snelkoppeling het eigenaar-dashboard. Er blijft een klein venster open met de titel **Wallet-beheer** en de tekst **Sluit dit venster om te stoppen**. Sluit dat venster, of druk op Ctrl+C, om het dashboard te stoppen. De browser gaat naar `http://127.0.0.1:<poort>/`.
+
+Dit startprogramma maakt geen seed aan. `init` en `backup` doe je in een zichtbare terminal.
+
+Bij de start leest het programma de gebruikersomgeving (`HKCU\Environment`, waar `setx` schrijft). Alleen namen die exact `WALLET_MCP_<COIN>_ALLOW_MAINNET` zijn worden overgenomen, bijvoorbeeld `WALLET_MCP_BTC_ALLOW_MAINNET` en `WALLET_MCP_USDC_ETH_ALLOW_MAINNET`. Vensters die al open stonden zien een nieuwe `setx` niet vanzelf; dit programma wel. Elke andere variabele blijft zoals het proces die al had. Het goedkeuringsgeheim erft mee en wordt niet gelezen, geprint, gelogd of gekopieerd.
+
+Staat `WALLET_MCP_MODE` op `agent`, dan stopt het programma. Het dashboard start dan niet. Draait dit dashboard al op poort 8770, dan opent alleen de browser. Is 8770 bezet door een ander programma, dan kiest het de eerstvolgende vrije poort. Er wordt alleen naar `127.0.0.1` geluisterd.
+
+### Snelkoppeling maken
+
+De checkout staat standaard in `%USERPROFILE%\Btc-wallet-MCP`, met de venv in `.venv` na `pip install -e .`.
+
+```powershell
+powershell -ExecutionPolicy Bypass -File .\scripts\build_launcher.ps1
+powershell -ExecutionPolicy Bypass -File .\scripts\install_shortcut.ps1
+```
+
+`build_launcher.ps1` installeert PyInstaller (extra `dev` in `pyproject.toml`) en maakt `dist\Wallet-beheer.exe`. Die exe bundelt de crypto-bibliotheken niet. Hij start de bestaande venv:
+
+```text
+%USERPROFILE%\Btc-wallet-MCP\.venv\Scripts\python.exe -m wallet_mcp launch
+```
+
+Het python-pad wordt gezocht in de mappen boven de exe (`.venv\Scripts\python.exe`) en anders op die standaardplek. Een ander pad zet je in `WALLET_BEHEER_PYTHON`.
+
+De build kopieert ook `dist\Wallet-beheer.cmd`. Hetzelfde script staat in `scripts\Wallet-beheer.cmd` als je geen exe bouwt. `install_shortcut.ps1` maakt een snelkoppeling op het bureaublad naar de exe, of naar de `.cmd` als de exe ontbreekt, met het icoon `assets\wallet-beheer.ico`.
+
+Zonder snelkoppeling, in `cmd.exe`:
+
+```bat
+wallet-beheer
+wallet-mcp launch
+```
+
+`wallet-beheer` is het console-script `wallet_mcp.launch:main`, zodat het venster zichtbaar blijft.
+
 ## Tools
 
 For each enabled coin `<coin>` (`btc`, `eth`, `avax`, `xrp`, `ltc`):

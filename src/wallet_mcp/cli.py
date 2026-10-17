@@ -514,9 +514,21 @@ def main(argv=None) -> None:
     dash = sub.add_parser("dashboard", help="localhost owner dashboard (refuses agent mode)")
     dash.add_argument("--port", type=int, default=8770)
 
+    launch = sub.add_parser(
+        "launch",
+        help="start the owner dashboard and open it in the browser",
+    )
+    launch.add_argument("--port", type=int, default=8770)
+
     sub.add_parser("serve", help="run the MCP stdio server")
 
     args = parser.parse_args(argv)
+    # Before load_config: mainnet opt-in may exist only in HKCU\Environment
+    # until launch refreshes those names into this process.
+    if args.cmd == "launch":
+        from .launch import run
+
+        return run(port=args.port)
     try:
         cfg = load_config()
     except ConfigError as exc:
