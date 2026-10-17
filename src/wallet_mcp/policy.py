@@ -397,6 +397,25 @@ class Policy:
         with exclusive_lock(self.directory):
             return self._get_pending(confirm_id)
 
+    def pending_payments(self) -> list[Pending]:
+        """Pending hot payments still inside the confirm window, oldest first.
+
+        Does not create a state file. A missing file means there is nothing to
+        show; writing an unsigned file here would fail closed once a secret
+        is configured.
+        """
+        with exclusive_lock(self.directory):
+            if not self.state_path.exists():
+                return []
+            state = self._state()
+            before = set(state["pending"])
+            self._expire(state)
+            if set(state["pending"]) != before:
+                self._write_state(state)
+            found = [Pending(**value) for value in state["pending"].values()]
+        found.sort(key=lambda item: item.created)
+        return found
+
     def _get_pending(self, confirm_id: str) -> Pending:
         state = self._state()
         self._expire(state)

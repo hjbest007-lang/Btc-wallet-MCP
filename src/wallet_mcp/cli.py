@@ -70,6 +70,22 @@ def _require_coin(coin_id: str) -> None:
         raise SystemExit(f"unknown coin {coin_id}; choose from {', '.join(COIN_ORDER)}")
 
 
+def cmd_dashboard(cfg, args) -> None:
+    if cfg.mode == "agent":
+        raise SystemExit("refusing: the owner dashboard does not start when WALLET_MCP_MODE=agent")
+    from .dashboard import make_dashboard
+
+    print(configure_banner())
+    print()
+    httpd = make_dashboard(cfg.env, args.port)
+    bound = httpd.server_address
+    print(f"Dashboard at http://{bound[0]}:{bound[1]}/  (localhost only, Ctrl-C to stop)")
+    try:
+        httpd.serve_forever()
+    except KeyboardInterrupt:
+        return
+
+
 def cmd_configure(cfg, args) -> None:
     print(configure_banner())
     print()
@@ -401,6 +417,9 @@ def main(argv=None) -> None:
     hw.add_argument("--device", choices=("ledger", "trezor"), required=True)
     hw.add_argument("--file", required=True, help="unsigned PSBT or EIP-712 JSON")
 
+    dash = sub.add_parser("dashboard", help="localhost owner dashboard (refuses agent mode)")
+    dash.add_argument("--port", type=int, default=8770)
+
     sub.add_parser("serve", help="run the MCP stdio server")
 
     args = parser.parse_args(argv)
@@ -412,6 +431,8 @@ def main(argv=None) -> None:
     if args.cmd == "serve":
         from .server import main as serve
         return serve()
+    if args.cmd == "dashboard":
+        return cmd_dashboard(cfg, args)
     if args.cmd == "configure":
         return cmd_configure(cfg, args)
     if args.cmd == "init":
