@@ -10,6 +10,7 @@ import pytest
 from eth_account import Account
 
 from btc_wallet_mcp.keystore import KeystoreError, decrypt_seed, write_seed_file
+from wallet_mcp.adapters.erc20 import OFFICIAL_TOKENS
 from wallet_mcp.cli import main
 from wallet_mcp.config import ConfigError, apply_enabled, load_config, save_config
 from wallet_mcp.derive import first_address, first_address_path
@@ -111,6 +112,11 @@ def enable(tmp_path, coins, **extra):
     cfg = load_config(env_of(tmp_path, **extra))
     apply_enabled(cfg, set(coins))
     return load_config(env_of(tmp_path, **extra))
+
+
+def usdt_avax_override():
+    """Fuji has no official USDT deployment. The contract only lets the adapter construct."""
+    return {"WALLET_MCP_USDT_AVAX_TOKEN": OFFICIAL_TOKENS[("usdt_avax", "mainnet")]}
 
 
 def answer_words(mnemonic):
@@ -303,12 +309,9 @@ def test_swapped_context_does_not_open_a_coin_seed(tmp_path):
 
 
 def test_init_all_derives_every_enabled_coin_on_its_configured_network(tmp_path, monkeypatch, fast_scrypt, capsys):
-    use_env(
-        monkeypatch, tmp_path,
-        WALLET_MCP_USDT_AVAX_TOKEN="0x9702230A8Ea53601f5cD2dc00fDBc13d4dF4A8c7",
-    )
+    use_env(monkeypatch, tmp_path, **usdt_avax_override())
     coins = ["btc", "eth", "avax", "xrp", "ltc", "usdc_eth", "usdt_eth", "usdc_avax", "usdt_avax", "sol"]
-    enable(tmp_path, coins, WALLET_MCP_USDT_AVAX_TOKEN="0x9702230A8Ea53601f5cD2dc00fDBc13d4dF4A8c7")
+    enable(tmp_path, coins, **usdt_avax_override())
     tty(monkeypatch, True)
 
     def wrapped(mnemonic, _reader):
@@ -318,9 +321,7 @@ def test_init_all_derives_every_enabled_coin_on_its_configured_network(tmp_path,
     monkeypatch.setattr("wallet_mcp.cli.confirm_backup", wrapped)
     main(["init", "--all", "--role", "hot", "--words", "12"])
     out = capsys.readouterr().out
-    cfg = load_config(env_of(
-        tmp_path, WALLET_MCP_USDT_AVAX_TOKEN="0x9702230A8Ea53601f5cD2dc00fDBc13d4dF4A8c7",
-    ))
+    cfg = load_config(env_of(tmp_path, **usdt_avax_override()))
     phrase = read_master(master_path(cfg), PW)
     assert len(phrase.split()) == 12
     assert out.count(phrase) == 1
