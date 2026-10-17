@@ -1,7 +1,9 @@
 """Ethereum and Avalanche C-chain. Same signer (eth-account), different chain id.
 
 Avalanche C-chain addresses use the Ethereum BIP-44 path m/44'/60'/0'/0/0,
-which is what MetaMask and most C-chain wallets derive. The adapter never
+which is what MetaMask and most C-chain wallets derive. The same mnemonic
+therefore yields the same address on both chains, and for ERC-20 tokens that
+spend that key. A separate per-coin seed does not share it. The adapter never
 holds a broadcaster; ``sign`` only runs after the payment gate calls ``execute``.
 """
 from __future__ import annotations

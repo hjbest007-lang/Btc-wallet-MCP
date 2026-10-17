@@ -86,7 +86,8 @@ class UnconfiguredHot(ChainAdapter):
     def _missing(self):
         raise AdapterError(
             f"hot {self.coin_id} wallet is not initialized; "
-            f"run `wallet-mcp init --coin {self.coin_id} --role hot`"
+            f"run `wallet-mcp init --coin {self.coin_id} --role hot` "
+            f"or `wallet-mcp init --all --role hot`"
         )
 
     def balance(self) -> dict:

@@ -38,10 +38,14 @@ def descriptors_from_mnemonic(mnemonic: str, network: str):
 
 
 class BtcWallet:
-    def __init__(self, cfg: Config, passphrase: str, client=None):
+    def __init__(self, cfg: Config, passphrase: str, client=None, *, mnemonic: str | None = None):
         self.cfg = cfg
         self.net = NETWORKS[cfg.network]
-        mnemonic = read_seed_file(cfg.data_dir / "seed.enc", passphrase, context="btc")
+        # The multi-coin server decrypts hot/seed.enc (context ``btc:hot``) or the
+        # master mnemonic itself and passes it in. The Bitcoin-only server still
+        # reads its own seed file, which is sealed with context ``btc``.
+        if mnemonic is None:
+            mnemonic = read_seed_file(cfg.data_dir / "seed.enc", passphrase, context="btc")
         ext, chg = descriptors_from_mnemonic(mnemonic, cfg.network)
         del mnemonic
         db = cfg.data_dir / "wallet.sqlite"  # BDK stores public descriptors/chain data only
