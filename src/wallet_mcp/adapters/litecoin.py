@@ -96,6 +96,14 @@ class EsploraLtc:
             raise AdapterError(f"fee estimate failed: {type(exc).__name__}") from None
 
 
+def address_at(mnemonic: str, network: str, branch: int = 0, index: int = 0) -> str:
+    """BIP84 receive/change address. Mainnet is coin type 2; test networks are coin type 1."""
+    private, _public = _version(network)
+    root = bip32.HDKey.from_seed(bip39.mnemonic_to_seed(mnemonic), version=private)
+    child = root.derive(f"m/84'/{coin_type_for(network)}/0'/{branch}/{index}")
+    return p2wpkh(child).address({"bech32": hrp_for(network)})
+
+
 def export_xpub(mnemonic: str, network: str) -> str:
     """Account-level public key at m/84'/<coin type>/0'. No private key in the result."""
     private, public = _version(network)
@@ -158,7 +166,9 @@ class LitecoinAdapter(ChainAdapter):
         if self._xpub is not None:
             child = self._xpub.derive(f"m/{branch}/{index}")
             return p2wpkh(child).address({"bech32": self._hrp})
-        return p2wpkh(self._hot_child(branch, index)).address({"bech32": self._hrp})
+        if not self._mnemonic:
+            raise AdapterError("cold watch-only wallet cannot sign")
+        return address_at(self._mnemonic, self.network, branch, index)
 
     def _indexes(self) -> dict:
         return self.index_store.load()

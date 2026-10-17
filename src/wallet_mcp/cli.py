@@ -11,7 +11,7 @@ import json
 import sys
 
 from btc_wallet_mcp.guard import sanitize_terminal
-from btc_wallet_mcp.keystore import read_seed_file, write_seed_file
+from btc_wallet_mcp.keystore import KeystoreError, read_seed_file, write_seed_file
 
 from .audit import AuditLog
 from .coins import COIN_ORDER, COINS
@@ -29,6 +29,16 @@ from .config import (
 )
 from .configure import interactive_select, make_httpd
 from .hardware import HardwareError, device_by_name, payload_hash, sign_cold_payment
+from .master import (
+    MasterError,
+    confirm_backup,
+    generate_mnemonic,
+    prepare_init_all,
+    read_master,
+    summary_lines,
+    write_master,
+    master_path,
+)
 from .material import new_secret, watch_document
 from .policy import Policy, approval_code, auto_approval_code, hardware_approval_code, limit_approval_code
 from .util import atomic_json, format_amount
@@ -119,7 +129,60 @@ def cmd_configure(cfg, args) -> None:
         print("warning:", warning)
 
 
+def _cmd_init_all(cfg, args) -> None:
+    """One BIP39 mnemonic. Hot only. Cold stays on a hardware wallet or the owner machine."""
+    if args.role != "hot":
+        raise SystemExit(
+            "refusing: --all does not create cold seeds. "
+            "Cold keys stay on a hardware wallet or the owner machine. "
+            "Use `init --coin COIN --role cold` there, or `hw-sign`."
+        )
+    if getattr(args, "coin", None):
+        raise SystemExit("init --all does not take --coin; it covers every enabled coin")
+    _tty()
+    try:
+        skipped = prepare_init_all(cfg, skip_existing=bool(getattr(args, "skip_existing", False)))
+    except MasterError as exc:
+        raise SystemExit(str(exc)) from None
+    passphrase = _passphrase(cfg.env, confirm=True)
+    try:
+        words = args.words if getattr(args, "words", None) else 24
+        mnemonic = generate_mnemonic(words)
+    except MasterError as exc:
+        raise SystemExit(str(exc)) from None
+    count = len(mnemonic.split())
+    print(f"\nWrite these {count} words on paper NOW. Shown once:\n")
+    print("   " + mnemonic + "\n")
+    print(
+        "This one mnemonic derives every enabled hot coin that does not already have its own seed. "
+        "Ethereum and Avalanche C-chain, and ERC-20 tokens on those chains, use m/44'/60'/0'/0/0 "
+        "and share one address when they are derived from this mnemonic. "
+        "One leak exposes all of those hot coins. Cold keys are not included. See DISCLAIMER.md.\n"
+    )
+    try:
+        confirm_backup(mnemonic, input)
+        path = write_master(cfg, passphrase, mnemonic)
+    except MasterError as exc:
+        raise SystemExit(str(exc)) from None
+    except KeystoreError as exc:
+        raise SystemExit(str(exc)) from None
+    print("\033[2J\033[H", end="")
+    print(f"Master hot seed saved to {path}")
+    for line in summary_lines(cfg, skipped):
+        print(" ", line)
+    print("One leak of this mnemonic exposes every hot coin derived from it.")
+    print("A per-coin hot/seed.enc still takes precedence if you add one later.")
+
+
 def cmd_init(cfg, args) -> None:
+    if getattr(args, "all", False):
+        return _cmd_init_all(cfg, args)
+    if getattr(args, "words", None) is not None:
+        raise SystemExit("--words is only valid with init --all")
+    if getattr(args, "skip_existing", False):
+        raise SystemExit("--skip-existing is only valid with init --all")
+    if not getattr(args, "coin", None):
+        raise SystemExit("init needs --coin, or --all --role hot")
     _require_coin(args.coin)
     if args.role == "cold" and cfg.mode == "agent":
         raise SystemExit("refusing: create the cold seed on the owner machine, not the agent host")
@@ -356,7 +419,27 @@ def cmd_unlock(cfg, args) -> None:
     print("unlocked")
 
 
+def _cmd_backup_all(cfg, args) -> None:
+    if getattr(args, "coin", None):
+        raise SystemExit("backup --all does not take --coin")
+    if args.role == "cold":
+        raise SystemExit(
+            "refusing: the master seed is a hot key. "
+            "Cold keys stay on a hardware wallet or the owner machine."
+        )
+    _tty()
+    try:
+        mnemonic = read_master(master_path(cfg), _passphrase(cfg.env))
+    except KeystoreError as exc:
+        raise SystemExit(str(exc)) from None
+    print(mnemonic)
+
+
 def cmd_backup(cfg, args) -> None:
+    if getattr(args, "all", False):
+        return _cmd_backup_all(cfg, args)
+    if not getattr(args, "coin", None):
+        raise SystemExit("backup needs --coin, or --all for the master mnemonic")
     _require_coin(args.coin)
     if args.role == "cold" and cfg.mode == "agent":
         raise SystemExit("refusing: cold seeds are not kept on the agent host")
@@ -365,7 +448,11 @@ def cmd_backup(cfg, args) -> None:
         path = cfg.hot_dir(args.coin) / "seed.enc"
     else:
         path = cfg.coin_root(args.coin) / "owner-cold" / "seed.enc"
-        print(read_seed_file(path, _passphrase(cfg.env), context=f"{args.coin}:{args.role}"))
+    try:
+        secret = read_seed_file(path, _passphrase(cfg.env), context=f"{args.coin}:{args.role}")
+    except KeystoreError as exc:
+        raise SystemExit(str(exc)) from None
+    print(secret)
 
 
 def main(argv=None) -> None:
@@ -378,9 +465,15 @@ def main(argv=None) -> None:
     configure.add_argument("--web", action="store_true", help="localhost checkbox page")
     configure.add_argument("--port", type=int, default=8765)
 
-    init = sub.add_parser("init", help="create a hot key, or a cold seed on the owner machine")
-    init.add_argument("--coin", required=True)
+    init = sub.add_parser("init", help="create a hot key, a cold seed, or one master mnemonic")
+    init.add_argument("--all", action="store_true", help="one BIP39 mnemonic for every enabled hot coin")
+    init.add_argument("--coin", help="one coin; not valid with --all")
     init.add_argument("--role", choices=("hot", "cold"), required=True)
+    init.add_argument("--words", type=int, choices=(12, 24), default=None, help="BIP39 length for --all (default 24)")
+    init.add_argument(
+        "--skip-existing", action="store_true",
+        help="keep enabled coins that already have a hot seed",
+    )
 
     watch = sub.add_parser("import-watch", help="import a public xpub or address for the cold wallet")
     watch.add_argument("--coin", required=True)
@@ -409,8 +502,9 @@ def main(argv=None) -> None:
     unlock = sub.add_parser("unlock", help="reset the failed-approval counter")
     unlock.add_argument("--coin", required=True)
 
-    backup = sub.add_parser("backup", help="show the hot or cold secret (TTY only)")
-    backup.add_argument("--coin", required=True)
+    backup = sub.add_parser("backup", help="show one coin's secret, or the master mnemonic (TTY only)")
+    backup.add_argument("--all", action="store_true", help="show the master hot mnemonic")
+    backup.add_argument("--coin", help="one coin; not valid with --all")
     backup.add_argument("--role", choices=("hot", "cold"), default="hot")
 
     hw = sub.add_parser("hw-sign", help="sign a cold payment on a Ledger or Trezor (TTY, owner only)")

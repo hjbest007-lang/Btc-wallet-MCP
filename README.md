@@ -32,7 +32,7 @@ The agent earns and pays for services on the owner's behalf. It spends from a **
 | | Cold | Hot |
 |---|---|---|
 | Where the secret lives | Only on the owner's machine | On the server the agent calls |
-| What the agent server stores | A watch-only xpub or address | An encrypted hot seed |
+| What the agent server stores | A watch-only xpub or address | An encrypted hot seed, or one master seed shared by the hot coins |
 | Can the server sign? | No. There is no cold send tool, and cold never auto-spends | Yes, after a per-payment approval code, or inside an owner-granted autonomous budget. Always inside the hard limits |
 | What bounds the loss | The cold key is not on this host | The balance the owner deposited, and the daily limit |
 
@@ -65,7 +65,7 @@ wallet-mcp hw-sign --device ledger --file unsigned.json
 
 No test broadcasts a transaction. Not on mainnet, and not on testnet either.
 
-Avalanche C-chain uses the same derivation as Ethereum (`m/44'/60'/0'/0/0`), which is what MetaMask uses for C-chain. Litecoin uses `m/84'/1'/0'` on testnet and `m/84'/2'/0'` on mainnet.
+Avalanche C-chain uses the same derivation as Ethereum (`m/44'/60'/0'/0/0`), which is what MetaMask uses for C-chain. A single master mnemonic therefore gives Ethereum, Avalanche C-chain, and ERC-20 tokens on those chains the same address. Litecoin uses `m/84'/2'/0'` on mainnet (BIP84 coin type 2) and `m/84'/1'/0'` on test networks. Bitcoin uses `m/84'/0'/0'` on mainnet and coin type 1 on signet, testnet, and regtest.
 
 ## Coins selecteren
 
@@ -172,11 +172,44 @@ given to the agent container.
 ```bash
 python3 -m venv .venv && . .venv/bin/activate
 pip install -e '.[test]'
-export WALLET_MCP_PASSPHRASE='long random passphrase'   # decrypts hot seeds
+export WALLET_MCP_PASSPHRASE='long random passphrase'   # decrypts hot seeds; not a BIP39 passphrase
 export WALLET_MCP_APPROVAL_SECRET='another long secret, not the passphrase'
-wallet-mcp configure --enable btc
-wallet-mcp init --coin btc --role hot                    # TTY only; shows 12 words once
+wallet-mcp configure --enable btc,eth,avax,xrp,ltc,usdc_eth,usdt_eth,usdc_avax,usdt_avax,sol
+wallet-mcp init --all --role hot                         # TTY only; one 24-word mnemonic
 ```
+
+`init --all` is one setup for every enabled hot coin. It writes a single encrypted file, `$WALLET_MCP_DATA_DIR/master.enc`, and each adapter derives its hot key from that mnemonic with an empty BIP39 passphrase (the keystore passphrase only encrypts the file):
+
+| Coin | First key | Network |
+|---|---|---|
+| Bitcoin | BIP84 `m/84'/0'/0'/0/0` | coin type 1 (`m/84'/1'/0'/0/0`) on signet, testnet, testnet4, and regtest |
+| Litecoin | BIP84 coin type 2, `m/84'/2'/0'/0/0` | coin type 1 on test networks |
+| Ethereum, Avalanche C-chain, USDC, USDT | `m/44'/60'/0'/0/0` | same address on every EVM network. Avalanche C-chain matches Ethereum on purpose |
+| XRP | `m/44'/144'/0'/0/0` | the configured network selects the endpoint, not the key |
+| Solana | `m/44'/501'/0'/0'` | the configured network selects the cluster, not the key |
+
+The words are shown once. You retype 3 of them before the file is saved. `--words 12` selects a 12-word mnemonic; the default is 24. `backup --all` shows those words again, and only in a TTY.
+
+**One leak of this mnemonic exposes every hot coin derived from it.** Use a separate `init --coin <coin> --role hot` when you want that isolation. A per-coin `hot/seed.enc` keeps working and takes precedence over the master. `init --all` refuses to run if any enabled coin already has a hot seed, unless you pass `--skip-existing` (those coins stay on their own seed). Enabling a coin later derives it from the same master, until you give it a seed of its own.
+
+`init --all --role cold` is refused. Cold keys stay on a hardware wallet or the owner machine; create them one coin at a time with `--role cold`, or sign with `hw-sign`. See [DISCLAIMER.md](DISCLAIMER.md).
+
+A single coin still works, and still shows its own secret once:
+
+```bash
+wallet-mcp init --coin btc --role hot                    # TTY only; 12 words, not the master
+```
+
+On Windows, in an interactive `cmd.exe` window (a pipe is refused). From the virtualenv Scripts directory, or after `.\.venv\Scripts\activate.bat`:
+
+```bat
+set WALLET_MCP_PASSPHRASE=long-random-passphrase
+.\.venv\Scripts\wallet-mcp.exe configure --enable btc,eth,avax,xrp,ltc,sol
+.\.venv\Scripts\wallet-mcp.exe init --all --role hot
+.\.venv\Scripts\wallet-mcp.exe backup --all
+```
+
+`--words 12` is optional. `init --all --role cold` is refused here too. If `wallet-mcp` is already on `PATH`, the `.\.venv\Scripts\wallet-mcp.exe` prefix can be dropped.
 
 Cold wallet, on the **owner's** machine (not the agent host):
 
@@ -287,7 +320,7 @@ The server process should run as its **own OS user** (or its own machine or cont
 | Agent rewrites the spend ledger | The ledger and pending state are HMAC-sealed with the approval secret. A bad MAC fails closed | Deleting the ledger file starts a fresh 24-hour window. Someone who can delete it can usually read the secret too |
 | Hostile chain API | Can lie about balances and fees. Cannot redirect a signed payment: outputs are checked locally, and fees above the cap are refused. Chain URLs must be https (http only on localhost), and redirects are refused | Privacy. Run your own node. An https URL on a private network is still allowed for a self-hosted node |
 | Accidental mainnet | Disabled until `WALLET_MCP_<COIN>_ALLOW_MAINNET=I_UNDERSTAND_REAL_MONEY`. Mainnet chain URLs must be https | – |
-| Stolen disk | scrypt (N=2^17, bounded) + AES-256-GCM. New files bind the ciphertext to the coin and role | A weak passphrase. Files written before that binding still use the shared tag |
+| Stolen disk | scrypt (N=2^17, bounded) + AES-256-GCM. New files bind the ciphertext to the coin and role. The master file is bound to `master:hot`; a wrong passphrase fails closed | A weak passphrase. Whoever can read the master file and the passphrase can spend every hot coin derived from it. Files written before context binding still use the shared tag |
 
 Out of scope: Lightning, multisig, RBF/CPFP, coin control. Hardware signing is owner-side only (Ledger or Trezor); the agent cannot start it, and this server does not broadcast the result.
 

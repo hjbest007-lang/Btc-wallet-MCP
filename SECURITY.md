@@ -22,7 +22,8 @@ Do not disclose publicly until a fix is available.
 | Asset | Where it should live |
 |---|---|
 | Cold seed or hardware key | Owner machine, or a Ledger/Trezor. Never on the agent host |
-| Hot seed | Encrypted file (`seed.enc`) readable by the server OS user only |
+| Hot seed | Encrypted file (`hot/seed.enc`) readable by the server OS user only. A per-coin file takes precedence over the master |
+| Master hot mnemonic | `$WALLET_MCP_DATA_DIR/master.enc`, AAD `master:hot`. One file derives every hot coin that has no seed of its own. A leak of the words is a leak of all of those hot coins. Cold keys are not derived from it |
 | Approval secret | Server OS user's environment or a mode `0400` file. Not in the agent config, the repo, or the MCP client |
 | Seed passphrase | Same boundary as the approval secret. It is a different value |
 | Hot-wallet funds | Only what the owner deposited, inside the per-tx and daily limits |
@@ -31,7 +32,7 @@ Do not disclose publicly until a fix is available.
 
 ## Actors
 
-- **Owner.** Runs `configure`, `init`, `import-watch`, `approve`, `approve-limit`, `request-auto`, `approve-auto`, `dashboard`, and `hw-sign` in a TTY (`request-auto` may lower a budget without a TTY; raising it is TTY-only; `dashboard` is a localhost page and is not a TTY prompt). Holds the approval secret and the cold key.
+- **Owner.** Runs `configure`, `init`, `import-watch`, `approve`, `approve-limit`, `request-auto`, `approve-auto`, `backup`, `dashboard`, and `hw-sign` in a TTY (`request-auto` may lower a budget without a TTY; raising it is TTY-only; `dashboard` is a localhost page and is not a TTY prompt). `init --all` and `backup --all` are TTY-only as well. Holds the approval secret and the cold key.
 - **Agent.** Talks to the MCP stdio server. Can be prompt-injected. Must not learn the approval secret or a cold key.
 - **Server process.** The `walletmcp` OS user. Can sign hot keys after the gate says yes. Cannot sign cold keys.
 - **Chain endpoints.** Esplora, Ethereum/Avalanche RPC, XRP, Solana. They can lie about balances and fees. They cannot change a transaction the process already checked locally.
@@ -40,7 +41,7 @@ Do not disclose publicly until a fix is available.
 
 ## Trust boundaries
 
-1. Agent process versus server process. Different OS users. The agent must not read `/proc/<pid>/environ`, `config.json`, `seed.enc`, or `approval-secret`.
+1. Agent process versus server process. Different OS users. The agent must not read `/proc/<pid>/environ`, `config.json`, `seed.enc`, `master.enc`, or `approval-secret`.
 2. Server versus cold key. The server stores a watch-only xpub or address. `WALLET_MCP_MODE=agent` refuses to boot if a cold seed file is present.
 3. Prepare versus send. Prepare does not hand a broadcaster to the adapter. Send receives one only inside `PaymentGate.send_payment`, after the HMAC check and a second limit check. The exception is an owner-granted autonomous budget: `prepare_payment` may broadcast only after the sealed ledger shows the payment fits `auto_max_per_tx` and the remaining `auto_max_per_day`, and only after that spend is reserved under the same file lock. The broadcaster still never enters the adapter constructor. Cold wallets never take this path.
 4. Hot spend versus hardware spend. Hardware signing is a TTY command on the owner machine. It is not an MCP tool. It refuses agent mode before it talks to a device, and it does not broadcast.
@@ -60,6 +61,7 @@ These are the invariants a review should try to break:
 - A cold adapter's `sign` raises `cold watch-only wallet cannot sign`.
 - `hw-sign` requires a TTY, refuses `WALLET_MCP_MODE=agent`, uses a separate HMAC (`hw|...|cold|...`), and returns only after the device reports a physical confirmation. Ledger and Trezor classes have no software signing fallback. The server does not broadcast the signature.
 - No tool returns a seed, xprv, private key, passphrase, or approval secret. `import-watch` rejects those shapes.
+- `init --all` writes one BIP39 mnemonic to `master.enc` with AAD `master:hot`. It is hot only: `--role cold` is refused. Cold keys stay on a hardware wallet or the owner machine, one coin at a time. The command and `backup --all` require a TTY. The words are shown once, and the file is written only after the operator retypes 3 random words. A per-coin `hot/seed.enc` takes precedence. If any enabled coin already has one, `init --all` refuses unless `--skip-existing`. A wrong passphrase fails closed and does not fall through to the other seed. Ethereum and Avalanche C-chain (and their ERC-20 tokens) share `m/44'/60'/0'/0/0`, so they share an address when both come from this mnemonic.
 - Mainnet stays off until `WALLET_MCP_<COIN>_ALLOW_MAINNET=I_UNDERSTAND_REAL_MONEY`.
 - The audit log and the webhook body do not contain the approval secret or an approval code. A webhook failure does not change the payment result. The webhook URL must be HTTPS, or HTTP to localhost only.
 
@@ -78,7 +80,8 @@ These are the invariants a review should try to break:
 | Webhook or log used to steal the secret | Neither channel is given the secret or the code. A bad webhook cannot approve a payment. An `auto_spent` notification does not carry a code either. The dashboard does not write the secret into `audit.log`, `config.json`, or the HTTP response | The log file if the server user is compromised. It still has no secret |
 | Owner dashboard reached from another host, or started by the agent | `wallet-mcp dashboard` listens on `127.0.0.1` only. There is no host flag. Host and Origin must name that listener, a CSRF token is minted per process, and the response sets `nosniff`, `no-store`, and a CSP with no remote assets. Agent mode exits before the socket opens. Approving a payment calls `PaymentGate.send_payment` with `approval_code`. There is no seed creation and no seed display | A local process can submit to `127.0.0.1` if it can read the page. The person at that browser can type the secret. The configure page still cannot raise a limit |
 | Accidental mainnet | Disabled until that coin's opt-in flag is set. Enabling mainnet prints a warning | The owner sets the flag and deposits more than they meant to |
-| Stolen disk | scrypt (N=2^17, bounded) + AES-256-GCM on hot seeds. New files bind the ciphertext to the coin and role | A weak passphrase. Files written before that binding still use the shared tag |
+| Stolen disk | scrypt (N=2^17, bounded) + AES-256-GCM on hot seeds. New files bind the ciphertext to the coin and role. `master.enc` is bound to `master:hot`. A wrong passphrase fails closed | A weak passphrase. Whoever can read the master file and the passphrase can spend every hot coin derived from it. Files written before context binding still use the shared tag |
+| Master mnemonic leaked | The file is encrypted, mode `0600`, and not returned by any MCP tool. `backup --all` is TTY-only. Per-coin seeds stay isolated and take precedence | One leak of the mnemonic exposes every hot coin that does not have its own seed. Do not use `init --all` if those coins must be isolated. Cold keys are unaffected only when they were not created from these words |
 | Supply chain | Actions are pinned to commit SHAs. CI runs semgrep, bandit, ruff, pip-audit, and gitleaks. Python dependencies stay version ranges (`bdkpython` is pinned). A review should re-check `eth-account`, `xrpl-py`, `embit`, `solders`, `cryptography`, and `mcp` | A compromised build of one of those. There are no signed releases |
 
 ## Review guide
@@ -87,7 +90,8 @@ Start with these files. A finding that lets an adapter broadcast without `Paymen
 
 - `src/wallet_mcp/gate.py`, `policy.py`, `auth.py` — the only spend path and the HMAC
 - `src/wallet_mcp/adapters/base.py` — `execute` must stay here
-- `src/wallet_mcp/registry.py` — broadcasters are constructed here and not stored on the adapter
+- `src/wallet_mcp/registry.py` — broadcasters are constructed here and not stored on the adapter. Hot keys come from a per-coin seed or, if that file is absent, from `master.enc`
+- `src/wallet_mcp/master.py`, `derive.py` — the master file, AAD `master:hot`, and the BIP44/BIP84 paths. Ethereum and Avalanche share `m/44'/60'/0'/0/0`
 - `src/wallet_mcp/adapters/xrp.py` — destination tag binding
 - `src/wallet_mcp/adapters/erc20.py` — calldata and gas binding
 - `src/wallet_mcp/adapters/solana.py` — experimental; same gate
@@ -97,7 +101,7 @@ Start with these files. A finding that lets an adapter broadcast without `Paymen
 - `src/btc_wallet_mcp/` — the original Bitcoin-only server, same approval idea, separate data directory
 - `scripts/install.sh`, `deploy/` — OS user and secret file permissions
 
-Tests that protect these invariants live in `tests/test_gate.py`, `tests/test_auto_budget.py`, `tests/test_adapters.py`, `tests/test_tokens.py`, `tests/test_solana.py`, `tests/test_hardware.py`, `tests/test_audit.py`, `tests/test_install.py`, and `tests/test_dashboard.py`. The default suite does not broadcast, including to a testnet. Opt-in integration tests only read public fee endpoints.
+Tests that protect these invariants live in `tests/test_gate.py`, `tests/test_auto_budget.py`, `tests/test_adapters.py`, `tests/test_tokens.py`, `tests/test_solana.py`, `tests/test_hardware.py`, `tests/test_audit.py`, `tests/test_install.py`, `tests/test_dashboard.py`, and `tests/test_master.py` (master-seed refusal, TTY, precedence, AAD, and a wrong passphrase failing closed). The default suite does not broadcast, including to a testnet. Opt-in integration tests only read public fee endpoints.
 
 ## Out of scope
 

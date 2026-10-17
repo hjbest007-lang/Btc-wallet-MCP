@@ -36,6 +36,9 @@ DEFAULT_RPC = {
     "mainnet": "https://xrplcluster.com",
 }
 MIN_FEE = 12
+# secp256k1 BIP44, the path Ledger, Xumm, and xrpl.js fromMnemonic use.
+# The key has no XRP family seed; the BIP39 mnemonic is the backup.
+BIP44_PATH = "m/44'/144'/0'/0/0"
 
 
 def _classic(address: str) -> str:
@@ -142,6 +145,28 @@ class UrlXrpRead:
         return bool(flags & REQUIRE_DEST_TAG)
 
 
+def wallet_from_mnemonic(mnemonic: str):
+    """First XRP account at ``m/44'/144'/0'/0/0``. Empty BIP39 passphrase.
+
+    The returned wallet has no family seed. Signing uses the secp256k1 key,
+    which XRPL encodes with a ``00`` prefix.
+    """
+    words = (mnemonic or "").split()
+    if len(words) not in (12, 15, 18, 21, 24):
+        raise AdapterError("XRP master key must be a BIP39 mnemonic")
+    from embit import bip32, bip39
+    from embit.networks import NETWORKS
+
+    seed = bip39.mnemonic_to_seed(mnemonic)
+    root = bip32.HDKey.from_seed(seed, version=NETWORKS["main"]["xprv"])
+    child = root.derive(BIP44_PATH)
+    secret = child.key.secret
+    public = child.key.sec()
+    wallet = Wallet(public.hex().upper(), "00" + secret.hex().upper())
+    del secret, public
+    return wallet
+
+
 def submit_blob(url: str, blob: str) -> None:
     result = rpc_call(url, "submit", {"tx_blob": blob})
     status = result.get("engine_result") or ""
@@ -156,7 +181,7 @@ class XrpAdapter(ChainAdapter):
     supports_transactions = False
 
     def __init__(self, *, network: str, role: str, address: str, rpc, max_fee_rate: int,
-                 seed: str | None = None, tag_required: dict | None = None):
+                 seed: str | None = None, wallet=None, tag_required: dict | None = None):
         self.network = network
         self.role = role
         self.address = _classic(address)
@@ -165,9 +190,11 @@ class XrpAdapter(ChainAdapter):
         self.tag_required = dict(KNOWN_EXCHANGE_ADDRESSES if tag_required is None else tag_required)
         self._wallet = None
         if role == "hot":
-            if not seed:
-                raise AdapterError("hot XRP wallet has no seed")
-            self._wallet = Wallet.from_seed(seed)
+            if wallet is None:
+                if not seed:
+                    raise AdapterError("hot XRP wallet has no seed")
+                wallet = Wallet.from_seed(seed)
+            self._wallet = wallet
             if self._wallet.classic_address != self.address:
                 raise AdapterError("XRP seed does not match the hot address")
         self.can_sign = self._wallet is not None and role == "hot"

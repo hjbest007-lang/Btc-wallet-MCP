@@ -1,0 +1,10 @@
+# Extends the default rules. The Avalanche USDT contract is a public address
+# (also in src/wallet_mcp/adapters/erc20.py). An older test assigned it next
+# to a TOKEN= name, which generic-api-key treats as a credential.
+[extend]
+useDefault = true
+
+[allowlist]
+description = "Published Avalanche USDT contract, not a credential"
+regexTarget = "secret"
+regexes = ['''0x9702230A8Ea53601f5cD2dc00fDBc13d4dF4A8c7''']

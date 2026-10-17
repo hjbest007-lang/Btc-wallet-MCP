@@ -58,6 +58,21 @@ class _GateBroadcaster:
         self._broadcaster(tx)
 
 
+def first_receive_address(mnemonic: str, network: str) -> str:
+    """BIP84 external address 0. Mainnet is coin type 0; every other network is coin type 1."""
+    import tempfile
+    from pathlib import Path
+
+    net = NETWORKS[network]
+    secret = bdk.DescriptorSecretKey(net, bdk.Mnemonic.from_string(mnemonic), None)
+    external = bdk.Descriptor.new_bip84(secret, bdk.KeychainKind.EXTERNAL, net)
+    internal = bdk.Descriptor.new_bip84(secret, bdk.KeychainKind.INTERNAL, net)
+    with tempfile.TemporaryDirectory() as tmp:
+        persister = bdk.Persister.new_sqlite(str(Path(tmp) / "wallet.sqlite"))
+        wallet = bdk.Wallet(external, internal, net, persister)
+        return str(wallet.peek_address(bdk.KeychainKind.EXTERNAL, 0).address)
+
+
 def public_descriptors(mnemonic: str, network: str) -> dict:
     """Watch-only BIP84 descriptors. The secret key does not leave this function."""
     net = NETWORKS[network]

@@ -11,7 +11,6 @@ from typing import Callable
 
 import bdkpython as bdk
 from btc_wallet_mcp.guard import open_chain
-from btc_wallet_mcp.keystore import read_seed_file
 from btc_wallet_mcp.wallet import BtcWallet
 
 from .adapters.base import AdapterError, ChainAdapter, UnconfiguredCold, UnconfiguredHot
@@ -38,10 +37,12 @@ from .adapters.xrp import (
     default_rpc as xrp_rpc,
     exchange_addresses,
     submit_blob,
+    wallet_from_mnemonic,
 )
 from .audit import AuditLog, WebhookNotifier
 from .config import AppConfig, ConfigError
 from .gate import PaymentGate
+from .master import load_hot_secret
 from .policy import Policy
 from .watch import load_watch_file
 
@@ -67,27 +68,15 @@ def _guard_agent_has_no_cold_seed(cfg: AppConfig, coin_id: str) -> None:
         )
 
 
-def _read_hot_secret(cfg: AppConfig, coin_id: str) -> str:
-    path = cfg.hot_dir(coin_id) / "seed.enc"
-    passphrase = cfg.env.get("WALLET_MCP_PASSPHRASE")
-    if not passphrase:
-        raise ConfigError("WALLET_MCP_PASSPHRASE not set")
-    return read_seed_file(
-        path, passphrase, missing_message=f"no hot {coin_id} wallet; run wallet-mcp init",
-        context=f"{coin_id}:hot",
-    )
-
-
 def build_bitcoin(cfg: AppConfig) -> Bundle:
     coin = cfg.coins["btc"]
     _guard_agent_has_no_cold_seed(cfg, "btc")
     hot_dir = cfg.hot_dir("btc")
-    if not (hot_dir / "seed.enc").exists():
+    secret = load_hot_secret(cfg, "btc")
+    if secret is None:
         hot = UnconfiguredHot("btc", coin.network, "sat", False)
         broadcaster = _refuse_broadcast
     else:
-        if not cfg.env.get("WALLET_MCP_PASSPHRASE"):
-            raise ConfigError("WALLET_MCP_PASSPHRASE not set")
         hot_dir.mkdir(parents=True, exist_ok=True)
         url = esplora_url(coin, cfg.env)
         inner = bdk.EsploraClient(url)
@@ -95,6 +84,7 @@ def build_bitcoin(cfg: AppConfig) -> Bundle:
             btc_config(coin, hot_dir, url),
             cfg.env["WALLET_MCP_PASSPHRASE"],
             client=ReadOnlyClient(inner),
+            mnemonic=secret.value,
         )
         hot = BitcoinAdapter(wallet, network=coin.network, role="hot")
 
@@ -130,12 +120,12 @@ def build_evm(coin_id: str):
         chain_id = coin.chain_id
         if chain_id is None:
             raise ConfigError(f"{coin_id} has no chain id for {coin.network}")
-        seed_path = cfg.hot_dir(coin_id) / "seed.enc"
-        if not seed_path.exists():
+        secret = load_hot_secret(cfg, coin_id)
+        if secret is None:
             hot = UnconfiguredHot(coin_id, coin.network, "wei", False)
             broadcaster = _refuse_broadcast
         else:
-            account = account_from_mnemonic(_read_hot_secret(cfg, coin_id))
+            account = account_from_mnemonic(secret.value)
             url = default_rpc(coin_id, coin.network, cfg.env, mainnet=coin.is_mainnet)
             hot = EvmAdapter(
                 coin_id=coin_id, network=coin.network, chain_id=chain_id, role="hot",
@@ -170,20 +160,22 @@ def _evm_cold(cfg: AppConfig, coin) -> ChainAdapter:
 def build_xrp(cfg: AppConfig) -> Bundle:
     coin = cfg.coins["xrp"]
     _guard_agent_has_no_cold_seed(cfg, "xrp")
-    seed_path = cfg.hot_dir("xrp") / "seed.enc"
-    if not seed_path.exists():
+    secret = load_hot_secret(cfg, "xrp")
+    if secret is None:
         hot = UnconfiguredHot("xrp", coin.network, "drop", coin.spec.experimental)
         broadcaster = _refuse_broadcast
     else:
         from xrpl.wallet import Wallet
 
-        seed = _read_hot_secret(cfg, "xrp")
-        wallet = Wallet.from_seed(seed)
+        if secret.source == "master":
+            wallet = wallet_from_mnemonic(secret.value)
+        else:
+            wallet = Wallet.from_seed(secret.value)
         url = xrp_rpc(coin.network, cfg.env, mainnet=coin.is_mainnet)
         hot = XrpAdapter(
             network=coin.network, role="hot", address=wallet.classic_address,
-            rpc=UrlXrpRead(url), max_fee_rate=coin.max_fee_rate, seed=seed,
-            tag_required=exchange_addresses(cfg.env),
+            rpc=UrlXrpRead(url), max_fee_rate=coin.max_fee_rate, seed=wallet.seed,
+            wallet=wallet, tag_required=exchange_addresses(cfg.env),
         )
 
         def broadcaster(blob, _url=url):
@@ -212,12 +204,12 @@ def _xrp_cold(cfg: AppConfig, coin) -> ChainAdapter:
 def build_ltc(cfg: AppConfig) -> Bundle:
     coin = cfg.coins["ltc"]
     _guard_agent_has_no_cold_seed(cfg, "ltc")
-    seed_path = cfg.hot_dir("ltc") / "seed.enc"
-    if not seed_path.exists():
+    secret = load_hot_secret(cfg, "ltc")
+    if secret is None:
         hot = UnconfiguredHot("ltc", coin.network, "litoshi", coin.spec.experimental)
         broadcaster = _refuse_broadcast
     else:
-        mnemonic = _read_hot_secret(cfg, "ltc")
+        mnemonic = secret.value
         url = default_esplora(coin.network, cfg.env, mainnet=coin.is_mainnet)
         hot_dir = cfg.hot_dir("ltc")
         hot_dir.mkdir(parents=True, exist_ok=True)
@@ -262,17 +254,17 @@ def build_token(coin_id: str):
         chain_id = coin.chain_id
         if chain_id is None:
             raise ConfigError(f"{coin_id} has no chain id for {coin.network}")
-        seed_path = cfg.hot_dir(parent) / "seed.enc"
         try:
             token = token_contract(coin_id, coin.network, cfg.env)
         except AdapterError as exc:
             raise ConfigError(str(exc)) from None
         url = default_rpc(parent, coin.network, cfg.env, mainnet=coin.is_mainnet)
-        if not seed_path.exists():
+        secret = load_hot_secret(cfg, coin_id)
+        if secret is None:
             hot = UnconfiguredHot(coin_id, coin.network, "token", False)
             broadcaster = _refuse_broadcast
         else:
-            account = account_from_mnemonic(_read_hot_secret(cfg, parent))
+            account = account_from_mnemonic(secret.value)
             hot = Erc20Adapter(
                 coin_id=coin_id, network=coin.network, chain_id=chain_id, role="hot",
                 address=account.address, token=token, rpc=UrlEvmRead(url),
@@ -307,12 +299,12 @@ def _token_cold(cfg: AppConfig, coin, parent: str, token: str, url: str) -> Chai
 def build_solana(cfg: AppConfig) -> Bundle:
     coin = cfg.coins["sol"]
     _guard_agent_has_no_cold_seed(cfg, "sol")
-    seed_path = cfg.hot_dir("sol") / "seed.enc"
-    if not seed_path.exists():
+    secret = load_hot_secret(cfg, "sol")
+    if secret is None:
         hot = UnconfiguredHot("sol", coin.network, "lamport", True)
         broadcaster = _refuse_broadcast
     else:
-        mnemonic = _read_hot_secret(cfg, "sol")
+        mnemonic = secret.value
         key = keypair_from_mnemonic(mnemonic)
         url = sol_rpc(coin.network, cfg.env, mainnet=coin.is_mainnet)
         hot = SolanaAdapter(
