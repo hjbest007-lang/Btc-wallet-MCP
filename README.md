@@ -268,6 +268,8 @@ wallet-mcp import-watch --coin btc --file cold-export.json
 
 `import-watch` rejects mnemonics, xprv/tprv strings, and XRP seeds.
 
+Prefer to create the cold Bitcoin wallet in Sparrow or on a hardware wallet instead of `init --role cold`? See [docs/cold-wallet-bitcoin.md](docs/cold-wallet-bitcoin.md) for the walkthrough: create the BIP84 wallet there, export only the public descriptor, and import it with `import-watch` as above.
+
 ### Add to an MCP client (stdio)
 
 Run this process as a **different OS user** from the agent. The agent's config must not contain `WALLET_MCP_APPROVAL_SECRET` or `WALLET_MCP_PASSPHRASE`.
